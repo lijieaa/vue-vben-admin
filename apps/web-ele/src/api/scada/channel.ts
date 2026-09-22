@@ -155,6 +155,35 @@ export function fetchChannelDevices(channel: string) {
   return scadaClient.get<ScadaDevice[]>(`${channelPath(channel)}/devices`);
 }
 
+export interface ScadaDeviceListPage {
+  devices: ScadaDevice[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export function fetchChannelDevicesPage(
+  channel: string,
+  query: {
+    name?: string;
+    model?: string;
+    page?: number;
+    page_size?: number;
+  },
+) {
+  return scadaClient.get<ScadaDeviceListPage>(
+    `${channelPath(channel)}/devices`,
+    {
+      params: {
+        name: query.name || undefined,
+        model: query.model || undefined,
+        page: query.page ?? 1,
+        page_size: query.page_size ?? 50,
+      },
+    },
+  );
+}
+
 export function createChannelDevice(
   channel: string,
   body: ScadaDeviceCreateBody,
@@ -275,6 +304,36 @@ export interface ScadaTagEntry {
 export function fetchDeviceTags(channel: string, device: string) {
   return scadaClient.get<{ tags: ScadaTagEntry[] }>(
     `${devicePath(channel, device)}/tags`,
+  );
+}
+
+export interface ScadaTagListPage {
+  tags: ScadaTagEntry[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export function fetchDeviceTagsPage(
+  channel: string,
+  device: string,
+  query: {
+    name?: string;
+    address?: string;
+    page?: number;
+    page_size?: number;
+  },
+) {
+  return scadaClient.get<ScadaTagListPage>(
+    `${devicePath(channel, device)}/tags`,
+    {
+      params: {
+        name: query.name || undefined,
+        address: query.address || undefined,
+        page: query.page ?? 1,
+        page_size: query.page_size ?? 50,
+      },
+    },
   );
 }
 

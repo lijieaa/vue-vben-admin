@@ -174,16 +174,19 @@ function filterAddressHints(
   done: (items: Array<ScadaAddressHint & { value: string }>) => void,
 ) {
   const q = query.trim().toLowerCase();
-  const items = addressHints.value
-    .filter((hint) => {
-      if (!q) return true;
-      return (
-        hint.text.toLowerCase().includes(q) ||
-        hint.example.toLowerCase().includes(q)
-      );
-    })
-    .map((hint) => ({ ...hint, value: hint.example }));
-  done(items);
+  let matched = addressHints.value.filter((hint) => {
+    if (!q) return true;
+    return (
+      hint.text.toLowerCase().includes(q) ||
+      hint.example.toLowerCase().includes(q)
+    );
+  });
+  // Imported / free-form addresses (e.g. "48212") match no catalog row —
+  // still offer the full dialect list so the picker does not look "missing".
+  if (matched.length === 0) {
+    matched = addressHints.value;
+  }
+  done(matched.map((hint) => ({ ...hint, value: hint.example })));
 }
 
 function onAddressHint(item: Record<string, any>) {

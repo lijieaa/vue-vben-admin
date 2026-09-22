@@ -58,25 +58,30 @@ function defaultBrokerUrl(): string {
   )?.trim();
   if (fromEnv) return fromEnv;
   // Prefer direct broker WS (FluxMQ). Same-origin /mqtt proxy is optional for prod gateways.
-  return 'ws://127.0.0.1:8083/mqtt';
+  return 'ws://127.0.0.1:8085/mqtt';
 }
 
 /**
  * Browser MQTT-over-WebSocket live feed for scada-engine embedded broker.
- * Subscribe gates scan via broker EventHook (same as client-ref).
+ * Prefer per-page tag topics over device `#` wildcards (large devices freeze SUBACK).
  */
 export class ScadaMqttLive {
-  private activeFilter = '';
+  private activeTopics: string[] = [];
   private client: MqttClient | null = null;
   private connectPromise: null | Promise<boolean> = null;
   private handler: null | ScadaMqttHandler = null;
   private slug = 'default';
+  private subscribeSeq = 0;
 
   async clearSubscription() {
-    if (this.client && this.activeFilter) {
-      this.client.unsubscribe(this.activeFilter);
+    if (this.client && this.activeTopics.length > 0) {
+      try {
+        this.client.unsubscribe(this.activeTopics);
+      } catch {
+        // ignore
+      }
     }
-    this.activeFilter = '';
+    this.activeTopics = [];
   }
 
   async disconnect() {
@@ -123,8 +128,8 @@ export class ScadaMqttLive {
         client.on('connect', () => {
           clearTimeout(timer);
           finish(true);
-          if (this.activeFilter) {
-            client.subscribe(this.activeFilter, { qos: 0 });
+          if (this.activeTopics.length > 0) {
+            client.subscribe(this.activeTopics, { qos: 0 });
           }
         });
         client.on('error', () => {
@@ -161,23 +166,58 @@ export class ScadaMqttLive {
     this.slug = projectSlug(titleOrSlug);
   }
 
-  async subscribeDevice(channel: string, device: string): Promise<boolean> {
+  /**
+   * Subscribe exact VTQ topics for the given tag paths (current list page).
+   * Avoid device `#` wildcards — those expand to every tag and stall the broker.
+   */
+  async subscribeTagPaths(paths: string[]): Promise<boolean> {
     const ok = await this.ensureConnected();
     if (!ok || !this.client) return false;
-    const filter = vtqDeviceFilter(this.slug, channel, device);
-    if (this.activeFilter && this.activeFilter !== filter) {
-      this.client.unsubscribe(this.activeFilter);
-    }
-    this.activeFilter = filter;
-    await new Promise<void>((resolve) => {
-      const client = this.client;
-      if (!client) {
-        resolve();
-        return;
+    const uniq = [...new Set(paths.filter(Boolean))];
+    const nextTopics = uniq.map((p) => vtqTopic(this.slug, p));
+    const seq = ++this.subscribeSeq;
+    const client = this.client;
+
+    const prev = this.activeTopics;
+    const prevSet = new Set(prev);
+    const nextSet = new Set(nextTopics);
+    const drop = prev.filter((t) => !nextSet.has(t));
+    const add = nextTopics.filter((t) => !prevSet.has(t));
+    this.activeTopics = nextTopics;
+
+    if (drop.length > 0) {
+      try {
+        client.unsubscribe(drop);
+      } catch {
+        // ignore
       }
-      client.subscribe(filter, { qos: 0 }, () => resolve());
+    }
+    if (add.length === 0) return true;
+
+    await new Promise<void>((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        resolve();
+      };
+      const timer = setTimeout(finish, 2000);
+      try {
+        client.subscribe(add, { qos: 0 }, () => {
+          if (seq !== this.subscribeSeq) {
+            clearTimeout(timer);
+            finish();
+            return;
+          }
+          clearTimeout(timer);
+          finish();
+        });
+      } catch {
+        clearTimeout(timer);
+        finish();
+      }
     });
-    return true;
+    return seq === this.subscribeSeq;
   }
 
   private handleMessage(topic: string, payload: Uint8Array) {

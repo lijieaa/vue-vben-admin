@@ -9,7 +9,7 @@ import type {
   ScadaTagEntry,
 } from '#/api/scada';
 
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
 import {
@@ -53,23 +53,25 @@ import {
   ElMessage,
   ElMessageBox,
   ElOption,
+  ElPagination,
   ElSelect,
+  ElTable,
+  ElTableColumn,
   ElTag,
   ElTooltip,
   ElTree,
 } from 'element-plus';
 
 import {
-  addClientRef,
   deleteChannelDevice,
   deleteDeviceTag,
   deleteProjectFile,
   fetchChannel,
   fetchChannelDevice,
   fetchChannelDevices,
+  fetchChannelDevicesPage,
   fetchChannels,
-  fetchDeviceTags,
-  fetchLiveTags,
+  fetchDeviceTagsPage,
   fetchProject,
   listProjectFiles,
   newProject,
@@ -77,7 +79,6 @@ import {
   patchChannelDevice,
   reinitChannelDevice,
   reloadProject,
-  removeClientRef,
   saveProject,
   saveProjectAs,
   scadaErrorMessage,
@@ -211,10 +212,19 @@ const liveViaMqtt = ref(false);
 let livePollTimer: null | ReturnType<typeof setInterval> = null;
 
 function applyLiveSample(path: string, value?: unknown, quality?: unknown) {
-  liveByPath.value = {
-    ...liveByPath.value,
-    [path]: { value, quality },
-  };
+  liveByPath.value[path] = { value, quality };
+  scheduleLiveTick();
+}
+
+const liveTick = ref(0);
+let liveUiTimer: null | ReturnType<typeof setTimeout> = null;
+
+function scheduleLiveTick() {
+  if (liveUiTimer) return;
+  liveUiTimer = setTimeout(() => {
+    liveUiTimer = null;
+    liveTick.value++;
+  }, 250);
 }
 
 async function stopLiveCollect() {
@@ -222,106 +232,44 @@ async function stopLiveCollect() {
     clearInterval(livePollTimer);
     livePollTimer = null;
   }
-  const paths = [...subscribedPaths.value];
+  if (liveUiTimer) {
+    clearTimeout(liveUiTimer);
+    liveUiTimer = null;
+  }
   subscribedPaths.value = [];
   liveByPath.value = {};
-  const wasMqtt = liveViaMqtt.value;
+  liveTick.value++;
   liveViaMqtt.value = false;
   await scadaMqttLive.clearSubscription();
-  if (wasMqtt) return;
-  await Promise.all(
-    paths.map(async (path) => {
-      try {
-        await removeClientRef(path);
-      } catch {
-        // ignore
-      }
-    }),
-  );
 }
 
-async function startLiveCollect(channel: string, device: string) {
-  const key = deviceKey(channel, device);
-  const tags = tagsByDevice.value[key] ?? [];
-  const next = tags
-    .filter((t) => (t.access || 'R').includes('R'))
-    .map((t) => tagLivePath(channel, device, t));
-
+function ensureLiveHandler() {
   scadaMqttLive.setSlug(projectTitle.value);
   scadaMqttLive.setHandler((sample) => {
     applyLiveSample(sample.path, sample.value, sample.quality);
   });
-
-  const mqttOk = await scadaMqttLive.subscribeDevice(channel, device);
-  if (mqttOk) {
-    // Drop HTTP poll / client-ref; broker subscribe owns interest + push.
-    if (livePollTimer) {
-      clearInterval(livePollTimer);
-      livePollTimer = null;
-    }
-    if (!liveViaMqtt.value && subscribedPaths.value.length > 0) {
-      await Promise.all(
-        subscribedPaths.value.map(async (path) => {
-          try {
-            await removeClientRef(path);
-          } catch {
-            // ignore
-          }
-        }),
-      );
-    }
-    liveViaMqtt.value = true;
-    subscribedPaths.value = next;
-    return;
-  }
-
-  // Fallback: HTTP client-ref + poll.
-  liveViaMqtt.value = false;
-  await scadaMqttLive.clearSubscription();
-  const prev = new Set(subscribedPaths.value);
-  const want = new Set(next);
-  for (const path of subscribedPaths.value) {
-    if (!want.has(path)) {
-      try {
-        await removeClientRef(path);
-      } catch {
-        // ignore
-      }
-    }
-  }
-  for (const path of next) {
-    if (!prev.has(path)) {
-      try {
-        await addClientRef(path);
-      } catch {
-        // ignore; tag may not exist yet
-      }
-    }
-  }
-  subscribedPaths.value = next;
-  if (!livePollTimer) {
-    livePollTimer = setInterval(() => {
-      void pollLiveValues();
-    }, 500);
-  }
-  await pollLiveValues();
 }
 
-async function pollLiveValues() {
-  if (liveViaMqtt.value || subscribedPaths.value.length === 0) return;
+/** Live feed follows the visible tag page only (never whole-device `#`). */
+async function syncLiveForPage(
+  channelName: string,
+  deviceName: string,
+  pageTags: ScadaTagEntry[],
+) {
+  const next = pageTags
+    .filter((t) => (t.access || 'R').includes('R'))
+    .map((t) => tagLivePath(channelName, deviceName, t));
+  subscribedPaths.value = next;
+  ensureLiveHandler();
+  if (next.length === 0) {
+    liveViaMqtt.value = false;
+    await scadaMqttLive.clearSubscription();
+    return;
+  }
   try {
-    const rows = await fetchLiveTags();
-    const map: Record<string, { value?: unknown; quality?: unknown }> = {
-      ...liveByPath.value,
-    };
-    const want = new Set(subscribedPaths.value);
-    for (const row of rows) {
-      if (!want.has(row.path)) continue;
-      map[row.path] = { value: row.value, quality: row.quality };
-    }
-    liveByPath.value = map;
+    liveViaMqtt.value = await scadaMqttLive.subscribeTagPaths(next);
   } catch {
-    // keep last
+    liveViaMqtt.value = false;
   }
 }
 
@@ -340,23 +288,27 @@ const collectDevice = computed(() => {
   return null;
 });
 
+/** Clear live when leaving a device; page fetch re-subscribes. */
 watch(
-  [collectDevice, tagsByDevice],
-  async ([dev]) => {
-    if (!dev) {
-      await stopLiveCollect();
-      return;
-    }
-    await startLiveCollect(dev.channel, dev.device);
+  () => {
+    const d = collectDevice.value;
+    return d ? `${d.channel}\0${d.device}` : '';
   },
-  { deep: true },
+  (key, prev) => {
+    if (key === prev) return;
+    if (!key) {
+      void stopLiveCollect();
+    }
+  },
 );
 
-watch(projectTitle, async (title) => {
+watch(projectTitle, (title) => {
   scadaMqttLive.setSlug(title);
-  const dev = collectDevice.value;
-  if (dev && liveViaMqtt.value) {
-    await startLiveCollect(dev.channel, dev.device);
+  if (liveViaMqtt.value && subscribedPaths.value.length > 0) {
+    ensureLiveHandler();
+    void scadaMqttLive.subscribeTagPaths(subscribedPaths.value).then((ok) => {
+      liveViaMqtt.value = ok;
+    });
   }
 });
 
@@ -488,26 +440,99 @@ const listRows = computed<ListRow[]>(() => {
     }));
   }
   if (n.kind === 'channel' && n.channel) {
-    return (devicesByChannel.value[n.channel] ?? []).map((d) => ({
-      id: `ch-${n.channel}-dev-${d.name}`,
-      kind: 'device' as const,
-      name: d.name,
-      channel: n.channel,
-      device: d.name,
-      driver: n.driver,
-      col2: d.model || '-',
-      col3: String(d.station_id ?? '-'),
-      col4: String(d.scan_rate_ms ?? '-'),
-    }));
+    return serverListRows.value;
   }
   if (n.kind === 'device' && n.channel && n.device) {
-    const channelName = n.channel;
-    const deviceName = n.device;
-    const key = deviceKey(channelName, deviceName);
-    return (tagsByDevice.value[key] ?? []).map((t) => {
-      const path = tagLivePath(channelName, deviceName, t);
-      const live = liveByPath.value[path];
-      return {
+    return serverListRows.value;
+  }
+  return [];
+});
+
+/** Device / tag lists use server-side search + pagination. */
+const listPagedMode = computed<'device' | 'none' | 'tag'>(() => {
+  const n = treeSelected.value;
+  if (n?.kind === 'channel') return 'device';
+  if (n?.kind === 'device') return 'tag';
+  return 'none';
+});
+
+const listSearchName = ref('');
+const listSearchSecondary = ref('');
+const listPage = ref(1);
+const listPageSize = ref(50);
+const serverListRows = ref<ListRow[]>([]);
+const serverListTotal = ref(0);
+const listFetchBusy = ref(false);
+let listFetchSeq = 0;
+let listSearchTimer: null | ReturnType<typeof setTimeout> = null;
+let listResetting = false;
+
+function resetListPager() {
+  listResetting = true;
+  listSearchName.value = '';
+  listSearchSecondary.value = '';
+  listPage.value = 1;
+  serverListRows.value = [];
+  serverListTotal.value = 0;
+  void nextTick(() => {
+    listResetting = false;
+  });
+}
+
+const listSecondarySearchLabel = computed(() =>
+  listPagedMode.value === 'tag'
+    ? $t('scada.workspace.searchAddress')
+    : $t('scada.workspace.searchModel'),
+);
+
+async function fetchServerList() {
+  const mode = listPagedMode.value;
+  const n = treeSelected.value;
+  if (mode === 'none' || !n) {
+    serverListRows.value = [];
+    serverListTotal.value = 0;
+    listFetchBusy.value = false;
+    return;
+  }
+  const seq = ++listFetchSeq;
+  listFetchBusy.value = true;
+  try {
+    if (mode === 'device' && n.channel) {
+      const res = await fetchChannelDevicesPage(n.channel, {
+        name: listSearchName.value.trim() || undefined,
+        model: listSearchSecondary.value.trim() || undefined,
+        page: listPage.value,
+        page_size: listPageSize.value,
+      });
+      if (seq !== listFetchSeq) return;
+      serverListTotal.value = res.total ?? 0;
+      serverListRows.value = (res.devices ?? []).map((d) => ({
+        id: `ch-${n.channel}-dev-${d.name}`,
+        kind: 'device' as const,
+        name: d.name,
+        channel: n.channel,
+        device: d.name,
+        driver: n.driver,
+        col2: d.model || '-',
+        col3: String(d.station_id ?? '-'),
+        col4: String(d.scan_rate_ms ?? '-'),
+      }));
+    }
+    if (mode === 'tag' && n.channel && n.device) {
+      const channelName = n.channel;
+      const deviceName = n.device;
+      const res = await fetchDeviceTagsPage(channelName, deviceName, {
+        name: listSearchName.value.trim() || undefined,
+        address: listSearchSecondary.value.trim() || undefined,
+        page: listPage.value,
+        page_size: listPageSize.value,
+      });
+      if (seq !== listFetchSeq) return;
+      serverListTotal.value = res.total ?? 0;
+      const key = deviceKey(channelName, deviceName);
+      const pageTags = res.tags ?? [];
+      tagsByDevice.value = { ...tagsByDevice.value, [key]: pageTags };
+      serverListRows.value = pageTags.map((t) => ({
         id: `ch-${channelName}-dev-${deviceName}-tag-${t.name}`,
         kind: 'tag' as const,
         name: t.name,
@@ -516,12 +541,85 @@ const listRows = computed<ListRow[]>(() => {
         driver: n.driver,
         col2: t.address || '-',
         col3: t.data_type || '-',
-        col4: live ? formatLiveValue(live.value) : '-',
+        col4: '-',
         tag: t,
-      };
-    });
+      }));
+      // Drop spinner before live sync — client-ref fan-out must not block the UI.
+      if (seq === listFetchSeq) listFetchBusy.value = false;
+      void syncLiveForPage(channelName, deviceName, pageTags);
+    }
+  } catch (error) {
+    if (seq !== listFetchSeq) return;
+    serverListRows.value = [];
+    serverListTotal.value = 0;
+    ElMessage.error(scadaErrorMessage(error));
+  } finally {
+    if (seq === listFetchSeq) listFetchBusy.value = false;
   }
-  return [];
+}
+
+function scheduleFetchServerList(immediate = false) {
+  if (listSearchTimer) {
+    clearTimeout(listSearchTimer);
+    listSearchTimer = null;
+  }
+  if (immediate) {
+    void fetchServerList();
+    return;
+  }
+  listSearchTimer = setTimeout(() => {
+    listSearchTimer = null;
+    void fetchServerList();
+  }, 300);
+}
+
+watch(
+  () => [listPagedMode.value, treeSelected.value?.id] as const,
+  ([mode]) => {
+    resetListPager();
+    if (mode !== 'none') scheduleFetchServerList(true);
+  },
+);
+
+watch([listSearchName, listSearchSecondary], () => {
+  if (listPagedMode.value === 'none' || listResetting) return;
+  if (listPage.value !== 1) {
+    listPage.value = 1;
+    return;
+  }
+  scheduleFetchServerList(false);
+});
+
+watch([listPage, listPageSize], () => {
+  if (listPagedMode.value === 'none' || listResetting) return;
+  scheduleFetchServerList(true);
+});
+
+function liveColFor(row: ListRow): string {
+  if (row.kind !== 'tag' || !row.channel || !row.device) {
+    return row.col4 ?? '-';
+  }
+  const tag = row.tag ?? {
+    name: row.name,
+    address: row.col2 === '-' ? '' : (row.col2 ?? ''),
+  };
+  const path = tagLivePath(row.channel, row.device, tag);
+  const live = liveByPath.value[path];
+  return live ? formatLiveValue(live.value) : '-';
+}
+
+const filteredListRows = computed(() =>
+  listPagedMode.value === 'none' ? listRows.value : serverListRows.value,
+);
+
+const pagedListRows = computed(() => {
+  void liveTick.value;
+  const rows = filteredListRows.value;
+  if (listPagedMode.value !== 'tag') return rows;
+  return rows.map((row) => ({
+    ...row,
+    col4: liveColFor(row),
+  }));
 });
 
 const listColumns = computed(() => {
@@ -659,25 +757,7 @@ async function loadDevicesForChannels(list: ScadaChannelInfo[]) {
     map[name] = devices;
   }
   devicesByChannel.value = map;
-
-  const tagEntries = await Promise.all(
-    list.flatMap((ch) =>
-      (map[ch.name] ?? []).map(async (d) => {
-        const key = deviceKey(ch.name, d.name);
-        try {
-          const res = await fetchDeviceTags(ch.name, d.name);
-          return [key, (res.tags ?? []) as ScadaTagEntry[]] as const;
-        } catch {
-          return [key, [] as ScadaTagEntry[]] as const;
-        }
-      }),
-    ),
-  );
-  const tmap: Record<string, ScadaTagEntry[]> = {};
-  for (const [key, tags] of tagEntries) {
-    tmap[key] = tags;
-  }
-  tagsByDevice.value = tmap;
+  // Tags load on demand via paginated list (avoid freezing on large maps).
 }
 
 async function loadChannelDetail(name: string) {
@@ -704,13 +784,7 @@ async function loadDeviceDetail(channel: string, device: string) {
   tagDetail.value = null;
   try {
     deviceDetail.value = await fetchChannelDevice(channel, device);
-    const key = deviceKey(channel, device);
-    try {
-      const res = await fetchDeviceTags(channel, device);
-      tagsByDevice.value = { ...tagsByDevice.value, [key]: res.tags ?? [] };
-    } catch {
-      // keep prior
-    }
+    // Do not fetch all tags here — paginated list owns tag loading.
   } catch (error) {
     deviceDetail.value = null;
     ElMessage.error(scadaErrorMessage(error));
@@ -722,6 +796,11 @@ async function loadDeviceDetail(channel: string, device: string) {
 function loadTagDetail(channel: string, device: string, tag: string) {
   channelDetail.value = null;
   deviceDetail.value = null;
+  const fromRow = listSelected.value;
+  if (fromRow?.kind === 'tag' && fromRow.name === tag && fromRow.tag) {
+    tagDetail.value = fromRow.tag;
+    return;
+  }
   const key = deviceKey(channel, device);
   const list = tagsByDevice.value[key] ?? [];
   tagDetail.value = list.find((t) => t.name === tag) ?? {
@@ -925,6 +1004,7 @@ function onTreeSelect(data: TreeNode) {
   const same = treeSelected.value?.id === data.id;
   treeSelected.value = data;
   listSelected.value = null;
+  // listPagedMode / treeSelected watch resets pager + fetches; do not double-reset here.
   if (
     same &&
     data.kind === 'project' &&
@@ -935,6 +1015,10 @@ function onTreeSelect(data: TreeNode) {
     return;
   }
   void syncPropsFromSelection();
+}
+
+function listTableRowClassName({ row }: { row: ListRow }) {
+  return listSelected.value?.id === row.id ? 'scada-list-row-selected' : '';
 }
 
 function onListSelect(row: ListRow) {
@@ -1024,11 +1108,13 @@ async function onChannelSubmit(_payload: ChannelPayload) {
 async function onDeviceSubmit(_name: string) {
   createDeviceVisible.value = false;
   await refresh();
+  scheduleFetchServerList(true);
 }
 
 async function onTagSubmit(_name: string) {
   createTagVisible.value = false;
   await refresh();
+  scheduleFetchServerList(true);
   await syncPropsFromSelection();
 }
 
@@ -1095,6 +1181,7 @@ async function onDeleteDevice() {
     }
     deviceDetail.value = null;
     await refresh();
+    scheduleFetchServerList(true);
   } catch (error) {
     if (error === 'cancel' || error === 'close') return;
     ElMessage.error(
@@ -1120,6 +1207,7 @@ async function onDeleteTag() {
     tagDetail.value = null;
     await refresh();
     await loadDeviceDetail(ch, dev);
+    scheduleFetchServerList(true);
   } catch (error) {
     if (error === 'cancel' || error === 'close') return;
     ElMessage.error(
@@ -1133,6 +1221,14 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  if (listSearchTimer) {
+    clearTimeout(listSearchTimer);
+    listSearchTimer = null;
+  }
+  if (liveUiTimer) {
+    clearTimeout(liveUiTimer);
+    liveUiTimer = null;
+  }
   void stopLiveCollect();
   void scadaMqttLive.disconnect();
 });
@@ -1631,9 +1727,47 @@ function onMenuCommand(cmd: string) {
                       {{ lastError }}
                     </span>
                   </div>
-                  <div class="min-h-0 flex-1 overflow-auto">
+                  <div
+                    v-if="listPagedMode !== 'none'"
+                    class="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2"
+                  >
+                    <ElInput
+                      v-model="listSearchName"
+                      clearable
+                      size="small"
+                      class="w-40"
+                      :placeholder="$t('scada.workspace.searchName')"
+                    />
+                    <ElInput
+                      v-model="listSearchSecondary"
+                      clearable
+                      size="small"
+                      class="w-40"
+                      :placeholder="listSecondarySearchLabel"
+                    />
+                    <span class="text-muted-foreground text-xs">
+                      {{
+                        $t('scada.workspace.listMatched', {
+                          n: serverListTotal,
+                        })
+                      }}
+                    </span>
+                  </div>
+                  <div
+                    class="min-h-0 flex-1"
+                    :class="
+                      listPagedMode !== 'none'
+                        ? 'overflow-hidden'
+                        : 'overflow-auto'
+                    "
+                    v-loading="listPagedMode !== 'none' && listFetchBusy"
+                  >
                     <div
-                      v-if="!listRows.length"
+                      v-if="
+                        listPagedMode !== 'none'
+                          ? !listFetchBusy && serverListTotal === 0
+                          : !filteredListRows.length
+                      "
                       class="text-muted-foreground px-3 py-6 text-sm"
                     >
                       {{
@@ -1642,6 +1776,41 @@ function onMenuCommand(cmd: string) {
                           : $t('scada.workspace.connectHint')
                       }}
                     </div>
+                    <ElTable
+                      v-else-if="listPagedMode !== 'none'"
+                      :data="pagedListRows"
+                      size="small"
+                      height="100%"
+                      highlight-current-row
+                      :row-class-name="listTableRowClassName"
+                      class="scada-list-table w-full"
+                      @row-click="onListSelect"
+                    >
+                      <ElTableColumn
+                        prop="name"
+                        :label="listColumns.c1"
+                        min-width="120"
+                        show-overflow-tooltip
+                      />
+                      <ElTableColumn
+                        prop="col2"
+                        :label="listColumns.c2"
+                        min-width="120"
+                        show-overflow-tooltip
+                      />
+                      <ElTableColumn
+                        prop="col3"
+                        :label="listColumns.c3"
+                        min-width="90"
+                        show-overflow-tooltip
+                      />
+                      <ElTableColumn
+                        prop="col4"
+                        :label="listColumns.c4"
+                        min-width="90"
+                        show-overflow-tooltip
+                      />
+                    </ElTable>
                     <table v-else class="w-full text-left text-sm">
                       <thead
                         class="bg-muted/20 sticky top-0 text-xs opacity-70"
@@ -1686,6 +1855,20 @@ function onMenuCommand(cmd: string) {
                         </tr>
                       </tbody>
                     </table>
+                  </div>
+                  <div
+                    v-if="listPagedMode !== 'none' && serverListTotal > 0"
+                    class="flex shrink-0 justify-end border-t px-2 py-1"
+                  >
+                    <ElPagination
+                      v-model:current-page="listPage"
+                      v-model:page-size="listPageSize"
+                      small
+                      background
+                      layout="total, sizes, prev, pager, next"
+                      :page-sizes="[20, 50, 100]"
+                      :total="serverListTotal"
+                    />
                   </div>
                 </section>
               </ResizablePanel>
@@ -2012,3 +2195,9 @@ function onMenuCommand(cmd: string) {
     <ProjectSettingsDialog v-model="projectSettingsVisible" @saved="refresh" />
   </Page>
 </template>
+
+<style scoped>
+.scada-list-table :deep(.scada-list-row-selected > td) {
+  background-color: hsl(var(--primary) / 10%);
+}
+</style>
