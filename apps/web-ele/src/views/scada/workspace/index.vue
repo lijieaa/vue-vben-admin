@@ -461,6 +461,8 @@ const listPagedMode = computed<'device' | 'none' | 'tag'>(() => {
 
 const listSearchName = ref('');
 const listSearchSecondary = ref('');
+/** Tag list only: '' | '1' (writable) | '0' (read-only). */
+const listTagWritable = ref('');
 const listPage = ref(1);
 const listPageSize = ref(50);
 const serverListRows = ref<ListRow[]>([]);
@@ -474,6 +476,7 @@ function resetListPager() {
   listResetting = true;
   listSearchName.value = '';
   listSearchSecondary.value = '';
+  listTagWritable.value = '';
   listPage.value = 1;
   serverListRows.value = [];
   serverListTotal.value = 0;
@@ -527,6 +530,7 @@ async function fetchServerList() {
       const res = await fetchDeviceTagsPage(channelName, deviceName, {
         name: listSearchName.value.trim() || undefined,
         address: listSearchSecondary.value.trim() || undefined,
+        writable: listTagWritable.value || undefined,
         page: listPage.value,
         page_size: listPageSize.value,
       });
@@ -584,7 +588,7 @@ watch(
   },
 );
 
-watch([listSearchName, listSearchSecondary], () => {
+watch([listSearchName, listSearchSecondary, listTagWritable], () => {
   if (listPagedMode.value === 'none' || listResetting) return;
   if (listPage.value !== 1) {
     listPage.value = 1;
@@ -768,20 +772,52 @@ type WriteDialogRow = {
 };
 
 const tagListSelection = ref<ListRow[]>([]);
+/** Cross-page tag selection (server pager). Keyed by ListRow.id. */
+const tagSelectionById = ref<Map<string, ListRow>>(new Map());
+const tagTableRef = ref<null | { clearSelection: () => void }>(null);
 const writeDialogVisible = ref(false);
 const writeDialogBusy = ref(false);
 const writeDialogViaHttp = ref(false);
 const writeDialogRows = ref<WriteDialogRow[]>([]);
 const writeFillAll = ref('');
 
+const tagSelectionCount = computed(() => tagSelectionById.value.size);
+
 const canBatchWrite = computed(
   () =>
     listPagedMode.value === 'tag' &&
-    tagListSelection.value.some((r) => tagIsWritable(r)),
+    [...tagSelectionById.value.values()].some((r) => tagIsWritable(r)),
 );
 
+function listRowKey(row: ListRow) {
+  return row.id;
+}
+
+function clearTagListSelection() {
+  tagSelectionById.value = new Map();
+  tagListSelection.value = [];
+  tagTableRef.value?.clearSelection();
+}
+
+/**
+ * Merge current-page checkbox changes into a cross-page selection map.
+ * ElTable reserve-selection + row-key keeps checkmarks when paging back;
+ * the map is the source of truth for batch write (selection-change alone
+ * can briefly empty while data reloads).
+ */
 function onTagSelectionChange(rows: ListRow[]) {
-  tagListSelection.value = rows.filter((r) => r.kind === 'tag');
+  const pageIds = new Set(
+    serverListRows.value.filter((r) => r.kind === 'tag').map((r) => r.id),
+  );
+  const next = new Map(tagSelectionById.value);
+  for (const id of pageIds) {
+    next.delete(id);
+  }
+  for (const row of rows) {
+    if (row.kind === 'tag') next.set(row.id, row);
+  }
+  tagSelectionById.value = next;
+  tagListSelection.value = [...next.values()];
 }
 
 function selectableTagRow(row: ListRow) {
@@ -829,11 +865,12 @@ function openWriteFromValueClick(row: ListRow, ev: Event) {
 }
 
 function openBatchWriteFromSelection() {
-  openWriteDialogForRows(tagListSelection.value);
+  openWriteDialogForRows([...tagSelectionById.value.values()]);
 }
 
 function applyWriteFillAll() {
   const v = writeFillAll.value;
+  let fail = 0;
   for (const row of writeDialogRows.value) {
     if (row.bool) {
       const s = String(v).trim().toLowerCase();
@@ -841,13 +878,25 @@ function applyWriteFillAll() {
     } else {
       row.next = v;
     }
+    row.error = validateWriteValue(row.next, row.dataType);
+    if (row.error) fail++;
+  }
+  if (fail > 0) {
+    ElMessage.warning(
+      $t('scada.workspace.writePartial', {
+        ok: writeDialogRows.value.length - fail,
+        fail,
+      }),
+    );
   }
 }
 
 function typeRangeHint(dt?: string): string {
   const r = typeRange(dt);
   if (!r) return '';
-  return `${r.min}..${r.max}`;
+  return r.integer
+    ? $t('scada.workspace.writeRangeHintInt', { min: r.min, max: r.max })
+    : $t('scada.workspace.writeRangeHintNum', { min: r.min, max: r.max });
 }
 
 function onWriteNextInput(row: WriteDialogRow) {
@@ -933,7 +982,19 @@ async function submitWriteDialog() {
 }
 
 watch(listPagedMode, (mode) => {
-  if (mode !== 'tag') tagListSelection.value = [];
+  if (mode !== 'tag') clearTagListSelection();
+});
+
+watch(
+  () => treeSelected.value?.id,
+  () => {
+    clearTagListSelection();
+  },
+);
+
+watch([listSearchName, listSearchSecondary, listTagWritable], () => {
+  if (listPagedMode.value !== 'tag' || listResetting) return;
+  clearTagListSelection();
 });
 
 const filteredListRows = computed(() =>
@@ -2073,6 +2134,27 @@ function onMenuCommand(cmd: string) {
                       class="w-40"
                       :placeholder="listSecondarySearchLabel"
                     />
+                    <ElSelect
+                      v-if="listPagedMode === 'tag'"
+                      v-model="listTagWritable"
+                      clearable
+                      size="small"
+                      class="w-28"
+                      :placeholder="$t('scada.workspace.filterWritable')"
+                    >
+                      <ElOption
+                        value=""
+                        :label="$t('scada.workspace.filterWritableAll')"
+                      />
+                      <ElOption
+                        value="1"
+                        :label="$t('scada.workspace.filterWritableYes')"
+                      />
+                      <ElOption
+                        value="0"
+                        :label="$t('scada.workspace.filterWritableNo')"
+                      />
+                    </ElSelect>
                     <span class="text-muted-foreground text-xs">
                       {{
                         $t('scada.workspace.listMatched', {
@@ -2087,7 +2169,13 @@ function onMenuCommand(cmd: string) {
                       :disabled="!canBatchWrite"
                       @click="openBatchWriteFromSelection"
                     >
-                      {{ $t('scada.workspace.writeSelected') }}
+                      {{
+                        tagSelectionCount > 0
+                          ? $t('scada.workspace.writeSelectedCount', {
+                              n: tagSelectionCount,
+                            })
+                          : $t('scada.workspace.writeSelected')
+                      }}
                     </ElButton>
                   </div>
                   <div
@@ -2115,7 +2203,9 @@ function onMenuCommand(cmd: string) {
                     </div>
                     <ElTable
                       v-else-if="listPagedMode !== 'none'"
+                      ref="tagTableRef"
                       :data="pagedListRows"
+                      :row-key="listRowKey"
                       size="small"
                       height="100%"
                       highlight-current-row
@@ -2128,6 +2218,7 @@ function onMenuCommand(cmd: string) {
                         v-if="listPagedMode === 'tag'"
                         type="selection"
                         width="40"
+                        reserve-selection
                         :selectable="selectableTagRow"
                       />
                       <ElTableColumn
@@ -2555,7 +2646,7 @@ function onMenuCommand(cmd: string) {
           ? $t('scada.workspace.writeBatchTitle')
           : $t('scada.workspace.writeSingleTitle')
       "
-      :width="writeDialogRows.length > 1 ? '720px' : '420px'"
+      width="720px"
       destroy-on-close
     >
       <p v-if="writeDialogViaHttp" class="text-muted-foreground mb-2 text-xs">
@@ -2589,46 +2680,47 @@ function onMenuCommand(cmd: string) {
           show-overflow-tooltip
         />
         <ElTableColumn
-          :label="$t('scada.workspace.writeRange')"
-          min-width="88"
-          show-overflow-tooltip
-        >
-          <template #default="{ row }">
-            {{ typeRangeHint(asWriteDialogRow(row).dataType) || '-' }}
-          </template>
-        </ElTableColumn>
-        <ElTableColumn
           prop="current"
           :label="$t('scada.workspace.writeCurrent')"
           min-width="80"
         />
-        <ElTableColumn :label="$t('scada.workspace.writeNew')" min-width="120">
+        <ElTableColumn :label="$t('scada.workspace.writeNew')" min-width="160">
           <template #default="{ row }">
-            <ElSwitch
-              v-if="asWriteDialogRow(row).bool"
-              v-model="asWriteDialogRow(row).next"
-              @change="() => onWriteNextInput(asWriteDialogRow(row))"
-            />
-            <ElInput
-              v-else
-              :model-value="String(asWriteDialogRow(row).next ?? '')"
-              size="small"
-              @update:model-value="
-                (v: string) => {
-                  asWriteDialogRow(row).next = v;
-                  onWriteNextInput(asWriteDialogRow(row));
-                }
+            <ElFormItem
+              class="write-value-form-item"
+              :error="asWriteDialogRow(row).error"
+            >
+              <ElSwitch
+                v-if="asWriteDialogRow(row).bool"
+                v-model="asWriteDialogRow(row).next"
+                @change="() => onWriteNextInput(asWriteDialogRow(row))"
+              />
+              <ElInput
+                v-else
+                :model-value="String(asWriteDialogRow(row).next ?? '')"
+                size="small"
+                :placeholder="
+                  typeRangeHint(asWriteDialogRow(row).dataType) || undefined
+                "
+                @update:model-value="
+                  (v: string) => {
+                    asWriteDialogRow(row).next = v;
+                    onWriteNextInput(asWriteDialogRow(row));
+                  }
+                "
+              />
+            </ElFormItem>
+            <div
+              v-if="
+                !asWriteDialogRow(row).error &&
+                typeRangeHint(asWriteDialogRow(row).dataType)
               "
-            />
+              class="text-muted-foreground px-0.5 text-xs leading-tight"
+            >
+              {{ typeRangeHint(asWriteDialogRow(row).dataType) }}
+            </div>
           </template>
         </ElTableColumn>
-        <ElTableColumn
-          v-if="writeDialogRows.some((r) => r.error)"
-          prop="error"
-          :label="$t('scada.workspace.writeError')"
-          min-width="140"
-          show-overflow-tooltip
-        />
       </ElTable>
       <template #footer>
         <ElButton @click="writeDialogVisible = false">
@@ -2655,5 +2747,20 @@ function onMenuCommand(cmd: string) {
 <style scoped>
 .scada-list-table :deep(.scada-list-row-selected > td) {
   background-color: hsl(var(--primary) / 10%);
+}
+
+.write-value-form-item {
+  margin-bottom: 0;
+}
+
+.write-value-form-item :deep(.el-form-item__content) {
+  line-height: normal;
+}
+
+.write-value-form-item :deep(.el-form-item__error) {
+  position: static;
+  padding-top: 2px;
+  line-height: 1.25;
+  white-space: normal;
 }
 </style>

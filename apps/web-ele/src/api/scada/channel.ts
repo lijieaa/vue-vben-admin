@@ -320,6 +320,8 @@ export function fetchDeviceTagsPage(
   query: {
     name?: string;
     address?: string;
+    /** "1" = writable (W/RW), "0" = read-only, omit = all */
+    writable?: string;
     page?: number;
     page_size?: number;
   },
@@ -330,6 +332,7 @@ export function fetchDeviceTagsPage(
       params: {
         name: query.name || undefined,
         address: query.address || undefined,
+        writable: query.writable || undefined,
         page: query.page ?? 1,
         page_size: query.page_size ?? 50,
       },
