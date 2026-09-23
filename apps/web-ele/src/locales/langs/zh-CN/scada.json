@@ -2,7 +2,8 @@
   "menu": {
     "scada": "SCADA",
     "workspace": "工作台",
-    "channelCreate": "新建通道"
+    "channelCreate": "新建通道",
+    "alarms": "报警与事件"
   },
   "workspace": {
     "title": "SCADA 工作台",
@@ -442,5 +443,47 @@
     "hints": {
       "virtualNetworkMode": "影响共用虚拟网络通道的令牌调度方式（负载均衡 / 优先级）。"
     }
+  },
+  "alarms": {
+    "title": "报警与事件",
+    "desc": "配置 Area / Source / Condition，并查看活动状态",
+    "refresh": "刷新",
+    "save": "保存配置",
+    "saved": "报警配置已保存",
+    "loadFailed": "加载报警配置失败",
+    "saveFailed": "保存失败",
+    "tree": "配置树",
+    "addArea": "添加 Area",
+    "addSource": "添加 Source",
+    "addCondition": "添加 Condition",
+    "addSub": "添加子条件",
+    "delete": "删除",
+    "areaName": "Area 名称",
+    "sourceName": "Source 名称",
+    "tag": "监视标签",
+    "conditionName": "Condition 名称",
+    "enabled": "启用",
+    "subName": "子条件名",
+    "type": "类型",
+    "op": "比较",
+    "threshold": "阈值",
+    "setpoint": "设定值",
+    "setpointTag": "设定值标签",
+    "deadband": "死区",
+    "rate": "变化率",
+    "windowMs": "窗口(ms)",
+    "severity": "严重度",
+    "message": "消息",
+    "ackRequired": "需要确认",
+    "live": "活动状态",
+    "events": "最近事件",
+    "ack": "确认",
+    "ackOk": "已确认",
+    "ackFailed": "确认失败",
+    "emptyTree": "暂无 Area，点击添加",
+    "selectNode": "在左侧选择节点进行编辑",
+    "typeValue": "值比较",
+    "typeDeviation": "偏差",
+    "typeRoc": "变化率"
   }
 }

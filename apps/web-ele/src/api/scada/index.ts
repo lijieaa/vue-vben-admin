@@ -1,3 +1,4 @@
+export * from './alarms';
 export * from './channel';
 export * from './client';
 export * from './eventLog';

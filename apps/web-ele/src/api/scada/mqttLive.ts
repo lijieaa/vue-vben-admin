@@ -62,6 +62,18 @@ export function vtqDeviceFilter(
   return `scada/${slug || 'default'}/vtq/${channel}/${device}/#`;
 }
 
+export function alarmAllFilter(slug: string): string {
+  return `scada/${slug || 'default'}/alarms/#`;
+}
+
+export function alarmDeviceFilter(
+  slug: string,
+  channel: string,
+  device: string,
+): string {
+  return `scada/${slug || 'default'}/alarms/${channel}/${device}/#`;
+}
+
 /** Topic `scada/{slug}/vtq/a/b/c` -> path `a.b.c`. */
 export function pathFromVtqTopic(slug: string, topic: string): null | string {
   const prefix = `scada/${slug || 'default'}/vtq/`;

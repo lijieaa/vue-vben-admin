@@ -2,7 +2,8 @@
   "menu": {
     "scada": "SCADA",
     "workspace": "Workspace",
-    "channelCreate": "New Channel"
+    "channelCreate": "New Channel",
+    "alarms": "Alarms & Events"
   },
   "workspace": {
     "title": "SCADA Workspace",
@@ -442,5 +443,47 @@
     "hints": {
       "virtualNetworkMode": "Controls token scheduling for shared virtual networks (load balanced / priority)."
     }
+  },
+  "alarms": {
+    "title": "Alarms & Events",
+    "desc": "Configure Area / Source / Condition and view active state",
+    "refresh": "Refresh",
+    "save": "Save",
+    "saved": "Alarm config saved",
+    "loadFailed": "Failed to load alarms",
+    "saveFailed": "Save failed",
+    "tree": "Config tree",
+    "addArea": "Add Area",
+    "addSource": "Add Source",
+    "addCondition": "Add Condition",
+    "addSub": "Add subcondition",
+    "delete": "Delete",
+    "areaName": "Area name",
+    "sourceName": "Source name",
+    "tag": "Watched tag",
+    "conditionName": "Condition name",
+    "enabled": "Enabled",
+    "subName": "Subcondition",
+    "type": "Type",
+    "op": "Operator",
+    "threshold": "Threshold",
+    "setpoint": "Setpoint",
+    "setpointTag": "Setpoint tag",
+    "deadband": "Deadband",
+    "rate": "Rate",
+    "windowMs": "Window (ms)",
+    "severity": "Severity",
+    "message": "Message",
+    "ackRequired": "Ack required",
+    "live": "Active state",
+    "events": "Recent events",
+    "ack": "Ack",
+    "ackOk": "Acknowledged",
+    "ackFailed": "Ack failed",
+    "emptyTree": "No areas yet",
+    "selectNode": "Select a node on the left to edit",
+    "typeValue": "Value",
+    "typeDeviation": "Deviation",
+    "typeRoc": "Rate of change"
   }
 }

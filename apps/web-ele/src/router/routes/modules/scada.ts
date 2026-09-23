@@ -33,6 +33,15 @@ const routes: RouteRecordRaw[] = [
           title: $t('scada.menu.channelCreate'),
         },
       },
+      {
+        name: 'ScadaAlarms',
+        path: 'alarms',
+        component: () => import('#/views/scada/alarms/index.vue'),
+        meta: {
+          icon: 'lucide:bell',
+          title: $t('scada.menu.alarms'),
+        },
+      },
     ],
   },
 ];
