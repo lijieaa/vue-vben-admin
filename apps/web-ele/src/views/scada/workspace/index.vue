@@ -463,6 +463,8 @@ const listSearchName = ref('');
 const listSearchSecondary = ref('');
 /** Tag list only: '' | '1' (writable) | '0' (read-only). */
 const listTagWritable = ref('');
+/** Tag list only: '' | '1' (scaling on) | '0' (scaling off). */
+const listTagScaling = ref('');
 const listPage = ref(1);
 const listPageSize = ref(50);
 const serverListRows = ref<ListRow[]>([]);
@@ -477,6 +479,7 @@ function resetListPager() {
   listSearchName.value = '';
   listSearchSecondary.value = '';
   listTagWritable.value = '';
+  listTagScaling.value = '';
   listPage.value = 1;
   serverListRows.value = [];
   serverListTotal.value = 0;
@@ -531,6 +534,7 @@ async function fetchServerList() {
         name: listSearchName.value.trim() || undefined,
         address: listSearchSecondary.value.trim() || undefined,
         writable: listTagWritable.value || undefined,
+        scaling: listTagScaling.value || undefined,
         page: listPage.value,
         page_size: listPageSize.value,
       });
@@ -588,14 +592,17 @@ watch(
   },
 );
 
-watch([listSearchName, listSearchSecondary, listTagWritable], () => {
-  if (listPagedMode.value === 'none' || listResetting) return;
-  if (listPage.value !== 1) {
-    listPage.value = 1;
-    return;
-  }
-  scheduleFetchServerList(false);
-});
+watch(
+  [listSearchName, listSearchSecondary, listTagWritable, listTagScaling],
+  () => {
+    if (listPagedMode.value === 'none' || listResetting) return;
+    if (listPage.value !== 1) {
+      listPage.value = 1;
+      return;
+    }
+    scheduleFetchServerList(false);
+  },
+);
 
 watch([listPage, listPageSize], () => {
   if (listPagedMode.value === 'none' || listResetting) return;
@@ -992,10 +999,13 @@ watch(
   },
 );
 
-watch([listSearchName, listSearchSecondary, listTagWritable], () => {
-  if (listPagedMode.value !== 'tag' || listResetting) return;
-  clearTagListSelection();
-});
+watch(
+  [listSearchName, listSearchSecondary, listTagWritable, listTagScaling],
+  () => {
+    if (listPagedMode.value !== 'tag' || listResetting) return;
+    clearTagListSelection();
+  },
+);
 
 const filteredListRows = computed(() =>
   listPagedMode.value === 'none' ? listRows.value : serverListRows.value,
@@ -2153,6 +2163,27 @@ function onMenuCommand(cmd: string) {
                       <ElOption
                         value="0"
                         :label="$t('scada.workspace.filterWritableNo')"
+                      />
+                    </ElSelect>
+                    <ElSelect
+                      v-if="listPagedMode === 'tag'"
+                      v-model="listTagScaling"
+                      clearable
+                      size="small"
+                      class="w-28"
+                      :placeholder="$t('scada.workspace.filterScaling')"
+                    >
+                      <ElOption
+                        value=""
+                        :label="$t('scada.workspace.filterScalingAll')"
+                      />
+                      <ElOption
+                        value="1"
+                        :label="$t('scada.workspace.filterScalingYes')"
+                      />
+                      <ElOption
+                        value="0"
+                        :label="$t('scada.workspace.filterScalingNo')"
                       />
                     </ElSelect>
                     <span class="text-muted-foreground text-xs">
