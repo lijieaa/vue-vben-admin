@@ -11,6 +11,17 @@ export type ScadaMqttSample = {
 
 export type ScadaMqttHandler = (sample: ScadaMqttSample) => void;
 
+export type ScadaMqttWriteItem = {
+  path: string;
+  value: unknown;
+};
+
+export type ScadaMqttWriteResult = {
+  path: string;
+  ok: boolean;
+  error?: string;
+};
+
 /** Match scada-engine project.Slug() for VTQ topic prefix. */
 export function projectSlug(title: string): string {
   const s = title.trim().toLowerCase();
@@ -33,6 +44,14 @@ export function projectSlug(title: string): string {
 
 export function vtqTopic(slug: string, path: string): string {
   return `scada/${slug || 'default'}/vtq/${path.split('.').join('/')}`;
+}
+
+export function writeTopic(slug: string): string {
+  return `scada/${slug || 'default'}/write`;
+}
+
+export function writeAckTopic(slug: string): string {
+  return `scada/${slug || 'default'}/write/ack`;
 }
 
 export function vtqDeviceFilter(
@@ -61,15 +80,25 @@ function defaultBrokerUrl(): string {
   return 'ws://127.0.0.1:8085/mqtt';
 }
 
+type AckWaiter = {
+  kind: 'batch' | 'single';
+  path?: string;
+  resolve: (results: ScadaMqttWriteResult[]) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
 /**
  * Browser MQTT-over-WebSocket live feed for scada-engine embedded broker.
  * Prefer per-page tag topics over device `#` wildcards (large devices freeze SUBACK).
  */
 export class ScadaMqttLive {
+  private ackSubscribed = false;
   private activeTopics: string[] = [];
   private client: MqttClient | null = null;
   private connectPromise: null | Promise<boolean> = null;
   private handler: null | ScadaMqttHandler = null;
+  private pendingAcks = new Set<AckWaiter>();
   private slug = 'default';
   private subscribeSeq = 0;
 
@@ -86,6 +115,8 @@ export class ScadaMqttLive {
 
   async disconnect() {
     await this.clearSubscription();
+    this.rejectAllAcks(new Error('mqtt disconnected'));
+    this.ackSubscribed = false;
     if (this.client) {
       this.client.end(true);
       this.client = null;
@@ -127,6 +158,7 @@ export class ScadaMqttLive {
 
         client.on('connect', () => {
           clearTimeout(timer);
+          this.ackSubscribed = false;
           finish(true);
           if (this.activeTopics.length > 0) {
             client.subscribe(this.activeTopics, { qos: 0 });
@@ -220,12 +252,122 @@ export class ScadaMqttLive {
     return seq === this.subscribeSeq;
   }
 
+  /** Single-tag write: publish {path,value}, wait matching write/ack. */
+  async writeTag(
+    path: string,
+    value: unknown,
+    timeoutMs = 5000,
+  ): Promise<ScadaMqttWriteResult> {
+    const results = await this.publishWrite(
+      { path, value },
+      'single',
+      path,
+      timeoutMs,
+    );
+    return results[0] ?? { path, ok: false, error: 'no ack' };
+  }
+
+  /** Multi-tag write: publish {items:[...]}, wait results ack. */
+  async writeTags(
+    items: ScadaMqttWriteItem[],
+    timeoutMs = 8000,
+  ): Promise<ScadaMqttWriteResult[]> {
+    if (items.length === 0) return [];
+    if (items.length === 1) {
+      const only = items[0];
+      if (!only) return [];
+      const one = await this.writeTag(only.path, only.value, timeoutMs);
+      return [one];
+    }
+    return this.publishWrite({ items }, 'batch', undefined, timeoutMs);
+  }
+
+  private async ensureAckSubscription(): Promise<void> {
+    const client = this.client;
+    if (!client?.connected) {
+      throw new Error('mqtt not connected');
+    }
+    if (this.ackSubscribed) return;
+    const topic = writeAckTopic(this.slug);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('ack subscribe timeout')),
+        2000,
+      );
+      try {
+        client.subscribe(topic, { qos: 0 }, (err) => {
+          clearTimeout(timer);
+          if (err) {
+            reject(err);
+            return;
+          }
+          this.ackSubscribed = true;
+          resolve();
+        });
+      } catch (error) {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
+  private handleAckPayload(text: string) {
+    let body: Record<string, unknown>;
+    try {
+      body = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+    const resultsRaw = body.results;
+    if (Array.isArray(resultsRaw)) {
+      const results = resultsRaw.map((row) => {
+        const r = row as Record<string, unknown>;
+        return {
+          path: String(r.path ?? ''),
+          ok: !!r.ok,
+          error:
+            r.error === null || r.error === undefined
+              ? undefined
+              : String(r.error),
+        } satisfies ScadaMqttWriteResult;
+      });
+      for (const waiter of [...this.pendingAcks]) {
+        if (waiter.kind !== 'batch') continue;
+        clearTimeout(waiter.timer);
+        this.pendingAcks.delete(waiter);
+        waiter.resolve(results);
+      }
+      return;
+    }
+    const path =
+      body.path === null || body.path === undefined ? '' : String(body.path);
+    const result: ScadaMqttWriteResult = {
+      path,
+      ok: !!body.ok,
+      error:
+        body.error === null || body.error === undefined
+          ? undefined
+          : String(body.error),
+    };
+    for (const waiter of [...this.pendingAcks]) {
+      if (waiter.kind !== 'single') continue;
+      if (waiter.path && path && waiter.path !== path) continue;
+      clearTimeout(waiter.timer);
+      this.pendingAcks.delete(waiter);
+      waiter.resolve([result]);
+    }
+  }
+
   private handleMessage(topic: string, payload: Uint8Array) {
+    const text = new TextDecoder().decode(payload);
+    if (topic === writeAckTopic(this.slug)) {
+      this.handleAckPayload(text);
+      return;
+    }
     if (!this.handler) return;
     const path = pathFromVtqTopic(this.slug, topic);
     if (!path) return;
     try {
-      const text = new TextDecoder().decode(payload);
       const body = JSON.parse(text) as ScadaMqttSample;
       this.handler({
         path: body.path || path,
@@ -235,6 +377,59 @@ export class ScadaMqttLive {
       });
     } catch {
       // ignore bad payload
+    }
+  }
+
+  private async publishWrite(
+    body: Record<string, unknown>,
+    kind: 'batch' | 'single',
+    path: string | undefined,
+    timeoutMs: number,
+  ): Promise<ScadaMqttWriteResult[]> {
+    const ok = await this.ensureConnected();
+    const client = this.client;
+    if (!ok || !client?.connected) {
+      throw new Error('mqtt not connected');
+    }
+    await this.ensureAckSubscription();
+    return new Promise<ScadaMqttWriteResult[]>((resolve, reject) => {
+      const waiter: AckWaiter = {
+        kind,
+        path,
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          this.pendingAcks.delete(waiter);
+          reject(new Error('write ack timeout'));
+        }, timeoutMs),
+      };
+      this.pendingAcks.add(waiter);
+      try {
+        client.publish(
+          writeTopic(this.slug),
+          JSON.stringify(body),
+          { qos: 0 },
+          (err) => {
+            if (err) {
+              clearTimeout(waiter.timer);
+              this.pendingAcks.delete(waiter);
+              reject(err);
+            }
+          },
+        );
+      } catch (error) {
+        clearTimeout(waiter.timer);
+        this.pendingAcks.delete(waiter);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
+  private rejectAllAcks(err: Error) {
+    for (const waiter of [...this.pendingAcks]) {
+      clearTimeout(waiter.timer);
+      this.pendingAcks.delete(waiter);
+      waiter.reject(err);
     }
   }
 }

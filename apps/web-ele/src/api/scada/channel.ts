@@ -344,6 +344,30 @@ export interface ScadaLiveTag {
   ts?: string;
 }
 
+export function putLiveTag(path: string, value: unknown) {
+  const segments = path
+    .split('.')
+    .map((s) => encodeURIComponent(s))
+    .join('/');
+  return scadaClient.request<{ ok: boolean; path: string }>(
+    `/api/v1/tags/${segments}`,
+    { method: 'PUT', data: { value } },
+  );
+}
+
+export type ScadaWriteResult = {
+  path: string;
+  ok: boolean;
+  error?: string;
+};
+
+export function batchWriteTags(items: { path: string; value: unknown }[]) {
+  return scadaClient.post<{ results: ScadaWriteResult[] }>(
+    '/api/v1/tags/batch-write',
+    { items },
+  );
+}
+
 export function fetchLiveTags() {
   return scadaClient.get<ScadaLiveTag[]>('/api/v1/tags');
 }

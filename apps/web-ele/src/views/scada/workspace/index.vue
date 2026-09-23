@@ -55,6 +55,7 @@ import {
   ElOption,
   ElPagination,
   ElSelect,
+  ElSwitch,
   ElTable,
   ElTableColumn,
   ElTag,
@@ -63,6 +64,7 @@ import {
 } from 'element-plus';
 
 import {
+  batchWriteTags,
   deleteChannelDevice,
   deleteDeviceTag,
   deleteProjectFile,
@@ -77,6 +79,7 @@ import {
   newProject,
   openProject,
   patchChannelDevice,
+  putLiveTag,
   reinitChannelDevice,
   reloadProject,
   saveProject,
@@ -607,6 +610,331 @@ function liveColFor(row: ListRow): string {
   const live = liveByPath.value[path];
   return live ? formatLiveValue(live.value) : '-';
 }
+
+function tagIsWritable(row: ListRow): boolean {
+  if (row.kind !== 'tag') return false;
+  return (row.tag?.access || 'R').includes('W');
+}
+
+function tagPathOf(row: ListRow): string {
+  if (!row.channel || !row.device) return '';
+  const tag = row.tag ?? { name: row.name };
+  return tagLivePath(row.channel, row.device, tag);
+}
+
+function isBoolDataType(dt?: string): boolean {
+  const u = (dt || '').toUpperCase();
+  return u === 'BOOL' || u === 'BOOLEAN' || u === 'BIT';
+}
+
+/** Inclusive numeric envelope aligned with host CDataType MinVal/MaxVal. */
+function typeRange(
+  dt?: string,
+): null | { min: number; max: number; integer: boolean } {
+  const u = (dt || '').trim().toUpperCase();
+  switch (u) {
+    case 'BOOL':
+    case 'BOOLEAN':
+    case 'BIT': {
+      return { min: 0, max: 1, integer: true };
+    }
+    case 'CHAR': {
+      return { min: -128, max: 127, integer: true };
+    }
+    case 'BYTE': {
+      return { min: 0, max: 255, integer: true };
+    }
+    case 'SHORT':
+    case 'INT16':
+    case 'INT': {
+      return { min: -32_768, max: 32_767, integer: true };
+    }
+    case 'WORD':
+    case 'UINT16':
+    case 'UINT': {
+      return { min: 0, max: 65_535, integer: true };
+    }
+    case 'LONG':
+    case 'INT32': {
+      return { min: -2_147_483_648, max: 2_147_483_647, integer: true };
+    }
+    case 'DWORD':
+    case 'UINT32': {
+      return { min: 0, max: 4_294_967_295, integer: true };
+    }
+    case 'FLOAT':
+    case 'SINGLE':
+    case 'REAL': {
+      return {
+        min: -3.4028234663852886e38,
+        max: 3.4028234663852886e38,
+        integer: false,
+      };
+    }
+    case 'DOUBLE': {
+      return { min: -Number.MAX_VALUE, max: Number.MAX_VALUE, integer: false };
+    }
+    case 'BCD': {
+      return { min: 0, max: 9999, integer: true };
+    }
+    case 'LBCD': {
+      return { min: 0, max: 99_999_999, integer: true };
+    }
+    default: {
+      return null;
+    }
+  }
+}
+
+function validateWriteValue(
+  raw: unknown,
+  dataType?: string,
+): string | undefined {
+  if (isBoolDataType(dataType)) {
+    if (typeof raw === 'boolean') return undefined;
+    const s = String(raw).trim().toLowerCase();
+    if (['0', '1', 'false', 'off', 'on', 'true'].includes(s)) return undefined;
+    const n = Number(s);
+    if (n === 0 || n === 1) return undefined;
+    return $t('scada.workspace.writeRangeError', {
+      value: String(raw),
+      type: dataType || 'Boolean',
+      min: 0,
+      max: 1,
+    });
+  }
+  const range = typeRange(dataType);
+  if (!range) return undefined;
+  const n = typeof raw === 'number' ? raw : Number(String(raw ?? '').trim());
+  if (!Number.isFinite(n)) {
+    return $t('scada.workspace.writeNotNumber', { type: dataType || '' });
+  }
+  if (range.integer && !Number.isInteger(n)) {
+    return $t('scada.workspace.writeNotInteger', {
+      value: String(raw),
+      type: dataType || '',
+    });
+  }
+  if (n < range.min || n > range.max) {
+    return $t('scada.workspace.writeRangeError', {
+      value: String(raw),
+      type: dataType || '',
+      min: range.min,
+      max: range.max,
+    });
+  }
+  return undefined;
+}
+
+function coerceWriteValue(raw: unknown, dataType?: string): unknown {
+  if (isBoolDataType(dataType)) {
+    if (typeof raw === 'boolean') return raw;
+    const s = String(raw).trim().toLowerCase();
+    if (s === 'true' || s === '1' || s === 'on') return true;
+    if (s === 'false' || s === '0' || s === 'off') return false;
+    return Boolean(raw);
+  }
+  const u = (dataType || '').toUpperCase();
+  if (
+    u.includes('INT') ||
+    u.includes('FLOAT') ||
+    u.includes('DOUBLE') ||
+    u.includes('REAL') ||
+    u === 'WORD' ||
+    u === 'DWORD' ||
+    u === 'SHORT' ||
+    u === 'LONG' ||
+    u === 'BYTE' ||
+    u === 'CHAR' ||
+    u === 'BCD' ||
+    u === 'LBCD'
+  ) {
+    if (typeof raw === 'number') return raw;
+    const n = Number(String(raw).trim());
+    return Number.isFinite(n) ? n : raw;
+  }
+  return raw;
+}
+
+type WriteDialogRow = {
+  path: string;
+  name: string;
+  access: string;
+  dataType: string;
+  current: string;
+  next: boolean | string;
+  bool: boolean;
+  error?: string;
+};
+
+const tagListSelection = ref<ListRow[]>([]);
+const writeDialogVisible = ref(false);
+const writeDialogBusy = ref(false);
+const writeDialogViaHttp = ref(false);
+const writeDialogRows = ref<WriteDialogRow[]>([]);
+const writeFillAll = ref('');
+
+const canBatchWrite = computed(
+  () =>
+    listPagedMode.value === 'tag' &&
+    tagListSelection.value.some((r) => tagIsWritable(r)),
+);
+
+function onTagSelectionChange(rows: ListRow[]) {
+  tagListSelection.value = rows.filter((r) => r.kind === 'tag');
+}
+
+function selectableTagRow(row: ListRow) {
+  return tagIsWritable(row);
+}
+
+function openWriteDialogForRows(rows: ListRow[]) {
+  const writable = rows.filter((r) => tagIsWritable(r));
+  if (writable.length === 0) {
+    ElMessage.warning($t('scada.workspace.writeNoWritable'));
+    return;
+  }
+  writeDialogViaHttp.value = !liveViaMqtt.value;
+  writeFillAll.value = '';
+  writeDialogRows.value = writable.map((row) => {
+    const path = tagPathOf(row);
+    const live = liveByPath.value[path];
+    const dt = row.tag?.data_type || row.col3 || '';
+    const bool = isBoolDataType(dt);
+    const current = live ? formatLiveValue(live.value) : '-';
+    let next: boolean | string = '';
+    if (bool) {
+      next =
+        live?.value === true || live?.value === 'true' || live?.value === 1;
+    } else if (live?.value !== undefined && live?.value !== null) {
+      next = formatLiveValue(live.value);
+    }
+    return {
+      path,
+      name: row.name,
+      access: row.tag?.access || '',
+      dataType: dt,
+      current,
+      next,
+      bool,
+    };
+  });
+  writeDialogVisible.value = true;
+}
+
+function openWriteFromValueClick(row: ListRow, ev: Event) {
+  ev.stopPropagation();
+  if (!tagIsWritable(row)) return;
+  openWriteDialogForRows([row]);
+}
+
+function openBatchWriteFromSelection() {
+  openWriteDialogForRows(tagListSelection.value);
+}
+
+function applyWriteFillAll() {
+  const v = writeFillAll.value;
+  for (const row of writeDialogRows.value) {
+    if (row.bool) {
+      const s = String(v).trim().toLowerCase();
+      row.next = s === 'true' || s === '1' || s === 'on';
+    } else {
+      row.next = v;
+    }
+  }
+}
+
+function typeRangeHint(dt?: string): string {
+  const r = typeRange(dt);
+  if (!r) return '';
+  return `${r.min}..${r.max}`;
+}
+
+function onWriteNextInput(row: WriteDialogRow) {
+  row.error = validateWriteValue(row.next, row.dataType);
+}
+
+function asListRow(row: unknown): ListRow {
+  return row as ListRow;
+}
+
+function asWriteDialogRow(row: unknown): WriteDialogRow {
+  return row as WriteDialogRow;
+}
+
+async function submitWriteDialog() {
+  let localFail = 0;
+  for (const row of writeDialogRows.value) {
+    const err = validateWriteValue(row.next, row.dataType);
+    row.error = err;
+    if (err) localFail++;
+  }
+  if (localFail > 0) {
+    ElMessage.warning(
+      $t('scada.workspace.writePartial', {
+        ok: writeDialogRows.value.length - localFail,
+        fail: localFail,
+      }),
+    );
+    return;
+  }
+  const items = writeDialogRows.value.map((row) => ({
+    path: row.path,
+    value: coerceWriteValue(row.next, row.dataType),
+  }));
+  if (items.length === 0) return;
+  writeDialogBusy.value = true;
+  try {
+    let results: { path: string; ok: boolean; error?: string }[];
+    if (liveViaMqtt.value && scadaMqttLive.isConnected()) {
+      writeDialogViaHttp.value = false;
+      const first = items[0];
+      results =
+        items.length === 1 && first
+          ? [await scadaMqttLive.writeTag(first.path, first.value)]
+          : await scadaMqttLive.writeTags(items);
+    } else {
+      writeDialogViaHttp.value = true;
+      const first = items[0];
+      if (items.length === 1 && first) {
+        await putLiveTag(first.path, first.value);
+        results = [{ path: first.path, ok: true }];
+      } else {
+        const res = await batchWriteTags(items);
+        results = res.results ?? [];
+      }
+    }
+    const byPath = new Map(results.map((r) => [r.path, r]));
+    let okCount = 0;
+    let failCount = 0;
+    for (const row of writeDialogRows.value) {
+      const r = byPath.get(row.path);
+      if (r?.ok) {
+        okCount++;
+        row.error = undefined;
+      } else {
+        failCount++;
+        row.error = r?.error || $t('scada.workspace.writeFailed');
+      }
+    }
+    if (failCount === 0) {
+      ElMessage.success($t('scada.workspace.writeOk', { n: okCount }));
+      writeDialogVisible.value = false;
+    } else {
+      ElMessage.warning(
+        $t('scada.workspace.writePartial', { ok: okCount, fail: failCount }),
+      );
+    }
+  } catch (error) {
+    ElMessage.error(scadaErrorMessage(error));
+  } finally {
+    writeDialogBusy.value = false;
+  }
+}
+
+watch(listPagedMode, (mode) => {
+  if (mode !== 'tag') tagListSelection.value = [];
+});
 
 const filteredListRows = computed(() =>
   listPagedMode.value === 'none' ? listRows.value : serverListRows.value,
@@ -1752,6 +2080,15 @@ function onMenuCommand(cmd: string) {
                         })
                       }}
                     </span>
+                    <ElButton
+                      v-if="listPagedMode === 'tag'"
+                      size="small"
+                      type="primary"
+                      :disabled="!canBatchWrite"
+                      @click="openBatchWriteFromSelection"
+                    >
+                      {{ $t('scada.workspace.writeSelected') }}
+                    </ElButton>
                   </div>
                   <div
                     class="min-h-0 flex-1"
@@ -1785,7 +2122,14 @@ function onMenuCommand(cmd: string) {
                       :row-class-name="listTableRowClassName"
                       class="scada-list-table w-full"
                       @row-click="onListSelect"
+                      @selection-change="onTagSelectionChange"
                     >
+                      <ElTableColumn
+                        v-if="listPagedMode === 'tag'"
+                        type="selection"
+                        width="40"
+                        :selectable="selectableTagRow"
+                      />
                       <ElTableColumn
                         prop="name"
                         :label="listColumns.c1"
@@ -1805,11 +2149,27 @@ function onMenuCommand(cmd: string) {
                         show-overflow-tooltip
                       />
                       <ElTableColumn
-                        prop="col4"
                         :label="listColumns.c4"
-                        min-width="90"
+                        min-width="100"
                         show-overflow-tooltip
-                      />
+                      >
+                        <template #default="{ row }">
+                          <button
+                            v-if="
+                              listPagedMode === 'tag' &&
+                              tagIsWritable(asListRow(row))
+                            "
+                            type="button"
+                            class="text-primary hover:underline"
+                            @click="
+                              openWriteFromValueClick(asListRow(row), $event)
+                            "
+                          >
+                            {{ asListRow(row).col4 }}
+                          </button>
+                          <span v-else>{{ asListRow(row).col4 }}</span>
+                        </template>
+                      </ElTableColumn>
                     </ElTable>
                     <table v-else class="w-full text-left text-sm">
                       <thead
@@ -2186,6 +2546,102 @@ function onMenuCommand(cmd: string) {
         @submit="onTagSubmit"
         @cancel="createTagVisible = false"
       />
+    </ElDialog>
+
+    <ElDialog
+      v-model="writeDialogVisible"
+      :title="
+        writeDialogRows.length > 1
+          ? $t('scada.workspace.writeBatchTitle')
+          : $t('scada.workspace.writeSingleTitle')
+      "
+      :width="writeDialogRows.length > 1 ? '720px' : '420px'"
+      destroy-on-close
+    >
+      <p v-if="writeDialogViaHttp" class="text-muted-foreground mb-2 text-xs">
+        {{ $t('scada.workspace.writeViaHttp') }}
+      </p>
+      <div
+        v-if="writeDialogRows.length > 1"
+        class="mb-3 flex flex-wrap items-center gap-2"
+      >
+        <ElInput
+          v-model="writeFillAll"
+          size="small"
+          class="w-48"
+          :placeholder="$t('scada.workspace.writeFillAll')"
+        />
+        <ElButton size="small" @click="applyWriteFillAll">
+          {{ $t('scada.workspace.writeApplyFill') }}
+        </ElButton>
+      </div>
+      <ElTable :data="writeDialogRows" size="small" max-height="360">
+        <ElTableColumn
+          prop="name"
+          :label="$t('scada.tag.fields.name')"
+          min-width="100"
+          show-overflow-tooltip
+        />
+        <ElTableColumn
+          prop="dataType"
+          :label="$t('scada.tag.fields.dataType')"
+          min-width="72"
+          show-overflow-tooltip
+        />
+        <ElTableColumn
+          :label="$t('scada.workspace.writeRange')"
+          min-width="88"
+          show-overflow-tooltip
+        >
+          <template #default="{ row }">
+            {{ typeRangeHint(asWriteDialogRow(row).dataType) || '-' }}
+          </template>
+        </ElTableColumn>
+        <ElTableColumn
+          prop="current"
+          :label="$t('scada.workspace.writeCurrent')"
+          min-width="80"
+        />
+        <ElTableColumn :label="$t('scada.workspace.writeNew')" min-width="120">
+          <template #default="{ row }">
+            <ElSwitch
+              v-if="asWriteDialogRow(row).bool"
+              v-model="asWriteDialogRow(row).next"
+              @change="() => onWriteNextInput(asWriteDialogRow(row))"
+            />
+            <ElInput
+              v-else
+              :model-value="String(asWriteDialogRow(row).next ?? '')"
+              size="small"
+              @update:model-value="
+                (v: string) => {
+                  asWriteDialogRow(row).next = v;
+                  onWriteNextInput(asWriteDialogRow(row));
+                }
+              "
+            />
+          </template>
+        </ElTableColumn>
+        <ElTableColumn
+          v-if="writeDialogRows.some((r) => r.error)"
+          prop="error"
+          :label="$t('scada.workspace.writeError')"
+          min-width="140"
+          show-overflow-tooltip
+        />
+      </ElTable>
+      <template #footer>
+        <ElButton @click="writeDialogVisible = false">
+          {{ $t('scada.workspace.writeCancel') }}
+        </ElButton>
+        <ElButton
+          type="primary"
+          :loading="writeDialogBusy"
+          @click="submitWriteDialog"
+        >
+          {{ $t('scada.workspace.writeSubmit') }}
+        </ElButton>
+      </template>
     </ElDialog>
 
     <DiagnosticsDrawer
