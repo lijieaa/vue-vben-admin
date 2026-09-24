@@ -11,6 +11,7 @@ import {
   ElMessage,
   ElOption,
   ElSelect,
+  ElSwitch,
 } from 'element-plus';
 
 import { fetchProject, patchProject, scadaErrorMessage } from '#/api/scada';
@@ -27,6 +28,8 @@ const form = reactive({
   title: '',
   file: '',
   virtualNetworkMode: 'load_balanced',
+  mqttSlug: '',
+  mqttVtqByDevice: false,
 });
 
 const groups = [{ key: 'general', labelKey: 'scada.channel.groups.general' }];
@@ -43,6 +46,8 @@ async function load() {
     form.title = p.title || '';
     form.file = p.file || '';
     form.virtualNetworkMode = p.virtual_network_mode || 'load_balanced';
+    form.mqttSlug = p.mqtt_slug || '';
+    form.mqttVtqByDevice = !!p.mqtt_vtq_by_device;
   } catch (error) {
     ElMessage.error(
       `${$t('scada.project.loadFailed')}: ${scadaErrorMessage(error)}`,
@@ -58,6 +63,8 @@ async function onSave() {
     await patchProject({
       title: form.title.trim(),
       virtual_network_mode: form.virtualNetworkMode,
+      mqtt_slug: form.mqttSlug.trim(),
+      mqtt_vtq_by_device: form.mqttVtqByDevice,
     });
     ElMessage.success($t('scada.project.saved'));
     emit('saved');
@@ -102,6 +109,22 @@ defineExpose({ load });
           </ElFormItem>
           <p class="text-muted-foreground text-xs">
             {{ $t('scada.project.hints.virtualNetworkMode') }}
+          </p>
+          <ElFormItem :label="$t('scada.project.fields.mqttSlug')">
+            <ElInput
+              v-model="form.mqttSlug"
+              maxlength="64"
+              placeholder="saltspray"
+            />
+          </ElFormItem>
+          <p class="text-muted-foreground text-xs">
+            {{ $t('scada.project.hints.mqttSlug') }}
+          </p>
+          <ElFormItem :label="$t('scada.project.fields.mqttVtqByDevice')">
+            <ElSwitch v-model="form.mqttVtqByDevice" />
+          </ElFormItem>
+          <p class="text-muted-foreground text-xs">
+            {{ $t('scada.project.hints.mqttVtqByDevice') }}
           </p>
         </template>
       </PropertySheet>

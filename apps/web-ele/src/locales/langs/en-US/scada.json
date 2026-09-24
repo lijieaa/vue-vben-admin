@@ -37,6 +37,7 @@
     "connected": "Runtime connected",
     "disconnected": "Runtime offline",
     "channels": "Channels",
+    "alarmsRoot": "Alarms & Events",
     "channelList": "Details",
     "empty": "No channels yet. Use New Channel to POST /api/v1/channels.",
     "selectChannel": "Select a channel or device on the left.",
@@ -438,10 +439,14 @@
     "saveFailed": "Failed to save project settings",
     "fields": {
       "title": "Title",
-      "virtualNetworkMode": "Virtual network mode"
+      "virtualNetworkMode": "Virtual network mode",
+      "mqttSlug": "MQTT namespace",
+      "mqttVtqByDevice": "Publish VTQ by device"
     },
     "hints": {
-      "virtualNetworkMode": "Controls token scheduling for shared virtual networks (load balanced / priority)."
+      "virtualNetworkMode": "Controls token scheduling for shared virtual networks (load balanced / priority).",
+      "mqttSlug": "Used in scada/{slug}/... topics. Only a-z, 0-9, -, _. Leave empty to derive from title (non-ASCII titles become default).",
+      "mqttVtqByDevice": "When on, MQTT northbound sends one full-tag snapshot per device; when off, each tag is published individually."
     }
   },
   "alarms": {
@@ -482,6 +487,7 @@
     "ackFailed": "Ack failed",
     "emptyTree": "No areas yet",
     "selectNode": "Select a node on the left to edit",
+    "selectFromTree": "Select Alarms & Events in the project tree to edit",
     "typeValue": "Value",
     "typeDeviation": "Deviation",
     "typeRoc": "Rate of change"

@@ -2,6 +2,7 @@
 import type { ChannelPayload } from '../channel/ChannelForm.vue';
 
 import type {
+  AlarmsConfig,
   ScadaChannelInfo,
   ScadaDevice,
   ScadaDeviceInfo,
@@ -10,7 +11,7 @@ import type {
 } from '#/api/scada';
 
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 
 import {
   Page,
@@ -34,6 +35,7 @@ import {
   SaveAll,
   Scissors,
   Settings,
+  SvgBellIcon,
   Tag,
   Trash2,
   Undo2,
@@ -75,6 +77,7 @@ import {
   fetchChannels,
   fetchDeviceTagsPage,
   fetchProject,
+  getAlarms,
   listProjectFiles,
   newProject,
   openProject,
@@ -88,6 +91,7 @@ import {
   scadaMqttLive,
 } from '#/api/scada';
 
+import AlarmsPanel from '../alarms/AlarmsPanel.vue';
 import ChannelForm from '../channel/ChannelForm.vue';
 import DeviceForm from '../device/DeviceForm.vue';
 import DevicePropsPanel from '../device/DevicePropsPanel.vue';
@@ -97,15 +101,28 @@ import EventLogPanel from './EventLogPanel.vue';
 import ProjectPropsPanel from './ProjectPropsPanel.vue';
 import ProjectSettingsDialog from './ProjectSettingsDialog.vue';
 
-/** Tree: workspace → projects → channel → device (tags live in the object list). */
+/** Tree: workspace → projects → channel|alarms → device|area → source → condition. */
+type TreeKind =
+  | 'alarm_area'
+  | 'alarm_condition'
+  | 'alarm_source'
+  | 'alarms'
+  | 'channel'
+  | 'device'
+  | 'project'
+  | 'workspace';
+
 interface TreeNode {
   id: string;
   label: string;
-  kind: 'channel' | 'device' | 'project' | 'workspace';
+  kind: TreeKind;
   file?: string;
   channel?: string;
   device?: string;
   driver?: string;
+  area?: string;
+  source?: string;
+  condition?: string;
   children?: TreeNode[];
 }
 
@@ -116,6 +133,10 @@ const TREE_ICONS = {
   project: BookOpenText,
   channel: Waypoints,
   device: Cpu,
+  alarms: SvgBellIcon,
+  alarm_area: FolderOpen,
+  alarm_source: PlugZap,
+  alarm_condition: Tag,
 } as const;
 
 function treeIconFor(kind: TreeNode['kind']) {
@@ -137,6 +158,7 @@ interface ListRow {
 }
 
 const router = useRouter();
+const route = useRoute();
 const filterText = ref('');
 const createChannelVisible = ref(false);
 const createDeviceVisible = ref(false);
@@ -150,6 +172,8 @@ const fileBusy = ref(false);
 const loading = ref(false);
 const detailLoading = ref(false);
 const projectTitle = ref('Runtime Project');
+const projectMqttSlug = ref('default');
+const projectMqttVtqByDevice = ref(false);
 const projectFile = ref('');
 const newProjectTitle = ref('Untitled');
 const newProjectName = ref('');
@@ -161,6 +185,7 @@ const devicesByChannel = ref<Record<string, ScadaDevice[]>>({});
 const tagsByDevice = ref<Record<string, ScadaTagEntry[]>>({});
 const connected = ref(false);
 const lastError = ref('');
+const alarmsConfig = ref<AlarmsConfig>({ areas: [] });
 
 /** Left tree selection = parent context for the object list. */
 const treeSelected = ref<null | TreeNode>(null);
@@ -247,13 +272,14 @@ async function stopLiveCollect() {
 }
 
 function ensureLiveHandler() {
-  scadaMqttLive.setSlug(projectTitle.value);
+  scadaMqttLive.setSlug(projectMqttSlug.value);
   scadaMqttLive.setHandler((sample) => {
     applyLiveSample(sample.path, sample.value, sample.quality);
   });
 }
 
-/** Live feed follows the visible tag page only (never whole-device `#`). */
+/** Live feed follows the visible tag page only (never whole-device `#`).
+ * When mqtt_vtq_by_device is on, subscribe the device snapshot topic instead. */
 async function syncLiveForPage(
   channelName: string,
   deviceName: string,
@@ -264,6 +290,17 @@ async function syncLiveForPage(
     .map((t) => tagLivePath(channelName, deviceName, t));
   subscribedPaths.value = next;
   ensureLiveHandler();
+  if (projectMqttVtqByDevice.value) {
+    try {
+      liveViaMqtt.value = await scadaMqttLive.subscribeDeviceVTQ(
+        channelName,
+        deviceName,
+      );
+    } catch {
+      liveViaMqtt.value = false;
+    }
+    return;
+  }
   if (next.length === 0) {
     liveViaMqtt.value = false;
     await scadaMqttLive.clearSubscription();
@@ -305,14 +342,36 @@ watch(
   },
 );
 
-watch(projectTitle, (title) => {
-  scadaMqttLive.setSlug(title);
+watch(projectMqttSlug, (slug) => {
+  scadaMqttLive.setSlug(slug);
   if (liveViaMqtt.value && subscribedPaths.value.length > 0) {
     ensureLiveHandler();
-    void scadaMqttLive.subscribeTagPaths(subscribedPaths.value).then((ok) => {
+    const mode = projectMqttVtqByDevice.value;
+    const paths = subscribedPaths.value;
+    const first = paths[0];
+    if (mode && first) {
+      const parts = first.split('.');
+      const channel = parts[0];
+      const device = parts[1];
+      if (parts.length >= 2 && channel && device) {
+        void scadaMqttLive.subscribeDeviceVTQ(channel, device).then((ok) => {
+          liveViaMqtt.value = ok;
+        });
+        return;
+      }
+    }
+    void scadaMqttLive.subscribeTagPaths(paths).then((ok) => {
       liveViaMqtt.value = ok;
     });
   }
+});
+
+watch(projectMqttVtqByDevice, () => {
+  const d = collectDevice.value;
+  if (!d) return;
+  const key = deviceKey(d.channel, d.device);
+  const pageTags = tagsByDevice.value[key] ?? [];
+  void syncLiveForPage(d.channel, d.device, pageTags);
 });
 
 const treeData = computed<TreeNode[]>(() => {
@@ -331,6 +390,32 @@ const treeData = computed<TreeNode[]>(() => {
       driver: ch.driver,
     })),
   }));
+  const alarmsRoot: TreeNode = {
+    id: 'alarms',
+    label: $t('scada.workspace.alarmsRoot'),
+    kind: 'alarms',
+    children: (alarmsConfig.value.areas || []).map((area) => ({
+      id: `alarms-area-${area.name}`,
+      label: area.name || '(area)',
+      kind: 'alarm_area' as const,
+      area: area.name,
+      children: (area.sources || []).map((src) => ({
+        id: `alarms-area-${area.name}-src-${src.name}`,
+        label: src.name || '(source)',
+        kind: 'alarm_source' as const,
+        area: area.name,
+        source: src.name,
+        children: (src.conditions || []).map((cond) => ({
+          id: `alarms-area-${area.name}-src-${src.name}-cond-${cond.name}`,
+          label: cond.name || '(condition)',
+          kind: 'alarm_condition' as const,
+          area: area.name,
+          source: src.name,
+          condition: cond.name,
+        })),
+      })),
+    })),
+  };
   let catalog = projectCatalog.value;
   if (catalog.length === 0 && projectFile.value) {
     catalog = [
@@ -352,11 +437,59 @@ const treeData = computed<TreeNode[]>(() => {
         kind: 'project' as const,
         file: p.name,
         children:
-          p.active || p.name === projectFile.value ? channelNodes : undefined,
+          p.active || p.name === projectFile.value
+            ? [...channelNodes, alarmsRoot]
+            : undefined,
       })),
     },
   ];
 });
+
+function isAlarmsKind(kind?: string) {
+  return (
+    kind === 'alarms' ||
+    kind === 'alarm_area' ||
+    kind === 'alarm_source' ||
+    kind === 'alarm_condition'
+  );
+}
+
+const alarmsContext = computed(() => isAlarmsKind(treeSelected.value?.kind));
+
+const alarmsFocusPath = computed(() => {
+  const n = treeSelected.value;
+  if (!n || !isAlarmsKind(n.kind)) return '';
+  if (n.kind === 'alarms') return '';
+  if (n.kind === 'alarm_area') return n.area || '';
+  if (n.kind === 'alarm_source') {
+    return n.area && n.source ? `${n.area}/${n.source}` : '';
+  }
+  if (n.kind === 'alarm_condition' && n.area && n.source && n.condition) {
+    return `${n.area}/${n.source}/${n.condition}`;
+  }
+  return '';
+});
+
+async function loadAlarmsConfig() {
+  try {
+    const body = await getAlarms();
+    alarmsConfig.value = {
+      areas: body?.areas ? structuredClone(body.areas) : [],
+    };
+  } catch {
+    alarmsConfig.value = { areas: [] };
+  }
+}
+
+function selectAlarmsRoot() {
+  if (!projectFile.value) return;
+  treeSelected.value = {
+    id: 'alarms',
+    label: $t('scada.workspace.alarmsRoot'),
+    kind: 'alarms',
+  };
+  listSelected.value = null;
+}
 
 const filteredTree = computed(() => {
   const q = filterText.value.trim().toLowerCase();
@@ -1221,7 +1354,12 @@ async function syncPropsFromSelection() {
     return;
   }
   const n = treeSelected.value;
-  if (!n || n.kind === 'workspace' || n.kind === 'project') {
+  if (
+    !n ||
+    n.kind === 'workspace' ||
+    n.kind === 'project' ||
+    isAlarmsKind(n.kind)
+  ) {
     channelDetail.value = null;
     deviceDetail.value = null;
     tagDetail.value = null;
@@ -1234,6 +1372,12 @@ async function syncPropsFromSelection() {
   }
 }
 
+function onAlarmsMutated(cfg: AlarmsConfig) {
+  alarmsConfig.value = {
+    areas: structuredClone(cfg?.areas || []),
+  };
+}
+
 async function refresh() {
   loading.value = true;
   lastError.value = '';
@@ -1244,10 +1388,13 @@ async function refresh() {
       listProjectFiles(),
     ]);
     projectTitle.value = proj.title || 'Runtime Project';
+    projectMqttSlug.value = proj.mqtt_slug_effective || 'default';
+    projectMqttVtqByDevice.value = !!proj.mqtt_vtq_by_device;
     projectFile.value = proj.file || '';
     projectCatalog.value = files.projects ?? [];
     channels.value = list ?? [];
     await loadDevicesForChannels(channels.value);
+    await loadAlarmsConfig();
     connected.value = true;
     if (!treeSelected.value) {
       const active =
@@ -1615,8 +1762,14 @@ async function onDeleteTag() {
   }
 }
 
-onMounted(() => {
-  void refresh();
+onMounted(async () => {
+  await refresh();
+  if (route.query.focus === 'alarms') {
+    selectAlarmsRoot();
+    const nextQuery = { ...route.query };
+    delete nextQuery.focus;
+    void router.replace({ query: nextQuery });
+  }
 });
 
 onUnmounted(() => {
@@ -2111,390 +2264,415 @@ function onMenuCommand(cmd: string) {
                 class="bg-border hover:bg-primary/40 data-[resize-handle-active]:bg-primary/50 w-1 transition-colors"
               />
 
-              <ResizablePanel :default-size="58" :min-size="20">
-                <section
-                  class="flex h-full min-h-0 min-w-0 flex-col"
-                  v-loading="detailLoading"
-                >
-                  <div
-                    class="bg-muted/30 flex shrink-0 items-center justify-between border-b px-3 py-2"
-                  >
-                    <span class="text-sm font-medium">{{
-                      listColumns.title
-                    }}</span>
-                    <span v-if="lastError" class="text-xs text-red-500">
-                      {{ lastError }}
-                    </span>
-                  </div>
-                  <div
-                    v-if="listPagedMode !== 'none'"
-                    class="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2"
-                  >
-                    <ElInput
-                      v-model="listSearchName"
-                      clearable
-                      size="small"
-                      class="w-40"
-                      :placeholder="$t('scada.workspace.searchName')"
-                    />
-                    <ElInput
-                      v-model="listSearchSecondary"
-                      clearable
-                      size="small"
-                      class="w-40"
-                      :placeholder="listSecondarySearchLabel"
-                    />
-                    <ElSelect
-                      v-if="listPagedMode === 'tag'"
-                      v-model="listTagWritable"
-                      clearable
-                      size="small"
-                      class="w-28"
-                      :placeholder="$t('scada.workspace.filterWritable')"
-                    >
-                      <ElOption
-                        value=""
-                        :label="$t('scada.workspace.filterWritableAll')"
-                      />
-                      <ElOption
-                        value="1"
-                        :label="$t('scada.workspace.filterWritableYes')"
-                      />
-                      <ElOption
-                        value="0"
-                        :label="$t('scada.workspace.filterWritableNo')"
-                      />
-                    </ElSelect>
-                    <ElSelect
-                      v-if="listPagedMode === 'tag'"
-                      v-model="listTagScaling"
-                      clearable
-                      size="small"
-                      class="w-28"
-                      :placeholder="$t('scada.workspace.filterScaling')"
-                    >
-                      <ElOption
-                        value=""
-                        :label="$t('scada.workspace.filterScalingAll')"
-                      />
-                      <ElOption
-                        value="1"
-                        :label="$t('scada.workspace.filterScalingYes')"
-                      />
-                      <ElOption
-                        value="0"
-                        :label="$t('scada.workspace.filterScalingNo')"
-                      />
-                    </ElSelect>
-                    <span class="text-muted-foreground text-xs">
-                      {{
-                        $t('scada.workspace.listMatched', {
-                          n: serverListTotal,
-                        })
-                      }}
-                    </span>
-                    <ElButton
-                      v-if="listPagedMode === 'tag'"
-                      size="small"
-                      type="primary"
-                      :disabled="!canBatchWrite"
-                      @click="openBatchWriteFromSelection"
-                    >
-                      {{
-                        tagSelectionCount > 0
-                          ? $t('scada.workspace.writeSelectedCount', {
-                              n: tagSelectionCount,
-                            })
-                          : $t('scada.workspace.writeSelected')
-                      }}
-                    </ElButton>
-                  </div>
-                  <div
-                    class="min-h-0 flex-1"
-                    :class="
-                      listPagedMode !== 'none'
-                        ? 'overflow-hidden'
-                        : 'overflow-auto'
-                    "
-                    v-loading="listPagedMode !== 'none' && listFetchBusy"
-                  >
-                    <div
-                      v-if="
-                        listPagedMode !== 'none'
-                          ? !listFetchBusy && serverListTotal === 0
-                          : !filteredListRows.length
-                      "
-                      class="text-muted-foreground px-3 py-6 text-sm"
-                    >
-                      {{
-                        connected
-                          ? $t('scada.workspace.listEmpty')
-                          : $t('scada.workspace.connectHint')
-                      }}
-                    </div>
-                    <ElTable
-                      v-else-if="listPagedMode !== 'none'"
-                      ref="tagTableRef"
-                      :data="pagedListRows"
-                      :row-key="listRowKey"
-                      size="small"
-                      height="100%"
-                      highlight-current-row
-                      :row-class-name="listTableRowClassName"
-                      class="scada-list-table w-full"
-                      @row-click="onListSelect"
-                      @selection-change="onTagSelectionChange"
-                    >
-                      <ElTableColumn
-                        v-if="listPagedMode === 'tag'"
-                        type="selection"
-                        width="40"
-                        reserve-selection
-                        :selectable="selectableTagRow"
-                      />
-                      <ElTableColumn
-                        prop="name"
-                        :label="listColumns.c1"
-                        min-width="120"
-                        show-overflow-tooltip
-                      />
-                      <ElTableColumn
-                        prop="col2"
-                        :label="listColumns.c2"
-                        min-width="120"
-                        show-overflow-tooltip
-                      />
-                      <ElTableColumn
-                        prop="col3"
-                        :label="listColumns.c3"
-                        min-width="90"
-                        show-overflow-tooltip
-                      />
-                      <ElTableColumn
-                        :label="listColumns.c4"
-                        min-width="100"
-                        show-overflow-tooltip
-                      >
-                        <template #default="{ row }">
-                          <button
-                            v-if="
-                              listPagedMode === 'tag' &&
-                              tagIsWritable(asListRow(row))
-                            "
-                            type="button"
-                            class="text-primary hover:underline"
-                            @click="
-                              openWriteFromValueClick(asListRow(row), $event)
-                            "
-                          >
-                            {{ asListRow(row).col4 }}
-                          </button>
-                          <span v-else>{{ asListRow(row).col4 }}</span>
-                        </template>
-                      </ElTableColumn>
-                    </ElTable>
-                    <table v-else class="w-full text-left text-sm">
-                      <thead
-                        class="bg-muted/20 sticky top-0 text-xs opacity-70"
-                      >
-                        <tr>
-                          <th class="px-3 py-2 font-medium">
-                            {{ listColumns.c1 }}
-                          </th>
-                          <th class="px-3 py-2 font-medium">
-                            {{ listColumns.c2 }}
-                          </th>
-                          <th class="px-3 py-2 font-medium">
-                            {{ listColumns.c3 }}
-                          </th>
-                          <th class="px-3 py-2 font-medium">
-                            {{ listColumns.c4 }}
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr
-                          v-for="row in listRows"
-                          :key="row.id"
-                          class="hover:bg-muted/40 cursor-pointer border-t"
-                          :class="
-                            listSelected?.id === row.id
-                              ? 'bg-primary/10'
-                              : undefined
-                          "
-                          @click="onListSelect(row)"
-                        >
-                          <td class="px-3 py-2 font-medium">{{ row.name }}</td>
-                          <td class="text-muted-foreground px-3 py-2">
-                            {{ row.col2 }}
-                          </td>
-                          <td class="text-muted-foreground px-3 py-2">
-                            {{ row.col3 }}
-                          </td>
-                          <td class="text-muted-foreground px-3 py-2">
-                            {{ row.col4 }}
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                  <div
-                    v-if="listPagedMode !== 'none' && serverListTotal > 0"
-                    class="flex shrink-0 justify-end border-t px-2 py-1"
-                  >
-                    <ElPagination
-                      v-model:current-page="listPage"
-                      v-model:page-size="listPageSize"
-                      small
-                      background
-                      layout="total, sizes, prev, pager, next"
-                      :page-sizes="[20, 50, 100]"
-                      :total="serverListTotal"
-                    />
-                  </div>
-                </section>
+              <ResizablePanel
+                v-if="alarmsContext"
+                :default-size="86"
+                :min-size="40"
+              >
+                <AlarmsPanel
+                  embed
+                  hide-tree
+                  :focus-path="alarmsFocusPath"
+                  @mutated="onAlarmsMutated"
+                />
               </ResizablePanel>
 
-              <ResizableHandle
-                class="bg-border hover:bg-primary/40 data-[resize-handle-active]:bg-primary/50 w-1 transition-colors"
-              />
-
-              <ResizablePanel :default-size="28" :min-size="16" :max-size="50">
-                <aside
-                  class="flex h-full min-h-0 flex-col overflow-hidden"
-                  v-loading="detailLoading"
-                >
-                  <div
-                    class="bg-muted/30 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b px-3 py-2"
+              <template v-else>
+                <ResizablePanel :default-size="58" :min-size="20">
+                  <section
+                    class="flex h-full min-h-0 min-w-0 flex-col"
+                    v-loading="detailLoading"
                   >
-                    <span class="text-xs font-medium">
-                      {{ $t('scada.workspace.propertySheet') }}
-                      <span
-                        v-if="propsFocus !== 'empty'"
-                        class="text-muted-foreground font-normal"
+                    <div
+                      class="bg-muted/30 flex shrink-0 items-center justify-between border-b px-3 py-2"
+                    >
+                      <span class="text-sm font-medium">{{
+                        listColumns.title
+                      }}</span>
+                      <span v-if="lastError" class="text-xs text-red-500">
+                        {{ lastError }}
+                      </span>
+                    </div>
+                    <div
+                      v-if="listPagedMode !== 'none'"
+                      class="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2"
+                    >
+                      <ElInput
+                        v-model="listSearchName"
+                        clearable
+                        size="small"
+                        class="w-40"
+                        :placeholder="$t('scada.workspace.searchName')"
+                      />
+                      <ElInput
+                        v-model="listSearchSecondary"
+                        clearable
+                        size="small"
+                        class="w-40"
+                        :placeholder="listSecondarySearchLabel"
+                      />
+                      <ElSelect
+                        v-if="listPagedMode === 'tag'"
+                        v-model="listTagWritable"
+                        clearable
+                        size="small"
+                        class="w-28"
+                        :placeholder="$t('scada.workspace.filterWritable')"
                       >
-                        ·
+                        <ElOption
+                          value=""
+                          :label="$t('scada.workspace.filterWritableAll')"
+                        />
+                        <ElOption
+                          value="1"
+                          :label="$t('scada.workspace.filterWritableYes')"
+                        />
+                        <ElOption
+                          value="0"
+                          :label="$t('scada.workspace.filterWritableNo')"
+                        />
+                      </ElSelect>
+                      <ElSelect
+                        v-if="listPagedMode === 'tag'"
+                        v-model="listTagScaling"
+                        clearable
+                        size="small"
+                        class="w-28"
+                        :placeholder="$t('scada.workspace.filterScaling')"
+                      >
+                        <ElOption
+                          value=""
+                          :label="$t('scada.workspace.filterScalingAll')"
+                        />
+                        <ElOption
+                          value="1"
+                          :label="$t('scada.workspace.filterScalingYes')"
+                        />
+                        <ElOption
+                          value="0"
+                          :label="$t('scada.workspace.filterScalingNo')"
+                        />
+                      </ElSelect>
+                      <span class="text-muted-foreground text-xs">
                         {{
-                          propsFocus === 'project'
-                            ? projectTitle
-                            : propsFocus === 'channel'
-                              ? channelDetail?.name || propsChannelName
-                              : propsFocus === 'device'
-                                ? deviceDetail?.name || propsDeviceName
-                                : tagDetail?.name
+                          $t('scada.workspace.listMatched', {
+                            n: serverListTotal,
+                          })
                         }}
                       </span>
-                    </span>
-                    <div
-                      v-if="propsFocus === 'device' && deviceDetail"
-                      class="flex flex-wrap gap-1"
-                    >
                       <ElButton
+                        v-if="listPagedMode === 'tag'"
                         size="small"
                         type="primary"
-                        @click="openCreateTagDialog"
+                        :disabled="!canBatchWrite"
+                        @click="openBatchWriteFromSelection"
                       >
-                        {{ $t('scada.workspace.newTag') }}
-                      </ElButton>
-                      <ElButton size="small" @click="onToggleEnabled">
                         {{
-                          deviceDetail.enabled
-                            ? $t('scada.workspace.disable')
-                            : $t('scada.workspace.enable')
+                          tagSelectionCount > 0
+                            ? $t('scada.workspace.writeSelectedCount', {
+                                n: tagSelectionCount,
+                              })
+                            : $t('scada.workspace.writeSelected')
                         }}
                       </ElButton>
-                      <ElButton size="small" @click="onReinit">
-                        {{ $t('scada.workspace.reinit') }}
-                      </ElButton>
-                      <ElButton
-                        size="small"
-                        type="danger"
-                        @click="onDeleteDevice"
+                    </div>
+                    <div
+                      class="min-h-0 flex-1"
+                      :class="
+                        listPagedMode !== 'none'
+                          ? 'overflow-hidden'
+                          : 'overflow-auto'
+                      "
+                      v-loading="listPagedMode !== 'none' && listFetchBusy"
+                    >
+                      <div
+                        v-if="
+                          listPagedMode !== 'none'
+                            ? !listFetchBusy && serverListTotal === 0
+                            : !filteredListRows.length
+                        "
+                        class="text-muted-foreground px-3 py-6 text-sm"
                       >
-                        {{ $t('scada.workspace.deleteDevice') }}
-                      </ElButton>
+                        {{
+                          connected
+                            ? $t('scada.workspace.listEmpty')
+                            : $t('scada.workspace.connectHint')
+                        }}
+                      </div>
+                      <ElTable
+                        v-else-if="listPagedMode !== 'none'"
+                        ref="tagTableRef"
+                        :data="pagedListRows"
+                        :row-key="listRowKey"
+                        size="small"
+                        height="100%"
+                        highlight-current-row
+                        :row-class-name="listTableRowClassName"
+                        class="scada-list-table w-full"
+                        @row-click="onListSelect"
+                        @selection-change="onTagSelectionChange"
+                      >
+                        <ElTableColumn
+                          v-if="listPagedMode === 'tag'"
+                          type="selection"
+                          width="40"
+                          reserve-selection
+                          :selectable="selectableTagRow"
+                        />
+                        <ElTableColumn
+                          prop="name"
+                          :label="listColumns.c1"
+                          min-width="120"
+                          show-overflow-tooltip
+                        />
+                        <ElTableColumn
+                          prop="col2"
+                          :label="listColumns.c2"
+                          min-width="120"
+                          show-overflow-tooltip
+                        />
+                        <ElTableColumn
+                          prop="col3"
+                          :label="listColumns.c3"
+                          min-width="90"
+                          show-overflow-tooltip
+                        />
+                        <ElTableColumn
+                          :label="listColumns.c4"
+                          min-width="100"
+                          show-overflow-tooltip
+                        >
+                          <template #default="{ row }">
+                            <button
+                              v-if="
+                                listPagedMode === 'tag' &&
+                                tagIsWritable(asListRow(row))
+                              "
+                              type="button"
+                              class="text-primary hover:underline"
+                              @click="
+                                openWriteFromValueClick(asListRow(row), $event)
+                              "
+                            >
+                              {{ asListRow(row).col4 }}
+                            </button>
+                            <span v-else>{{ asListRow(row).col4 }}</span>
+                          </template>
+                        </ElTableColumn>
+                      </ElTable>
+                      <table v-else class="w-full text-left text-sm">
+                        <thead
+                          class="bg-muted/20 sticky top-0 text-xs opacity-70"
+                        >
+                          <tr>
+                            <th class="px-3 py-2 font-medium">
+                              {{ listColumns.c1 }}
+                            </th>
+                            <th class="px-3 py-2 font-medium">
+                              {{ listColumns.c2 }}
+                            </th>
+                            <th class="px-3 py-2 font-medium">
+                              {{ listColumns.c3 }}
+                            </th>
+                            <th class="px-3 py-2 font-medium">
+                              {{ listColumns.c4 }}
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr
+                            v-for="row in listRows"
+                            :key="row.id"
+                            class="hover:bg-muted/40 cursor-pointer border-t"
+                            :class="
+                              listSelected?.id === row.id
+                                ? 'bg-primary/10'
+                                : undefined
+                            "
+                            @click="onListSelect(row)"
+                          >
+                            <td class="px-3 py-2 font-medium">
+                              {{ row.name }}
+                            </td>
+                            <td class="text-muted-foreground px-3 py-2">
+                              {{ row.col2 }}
+                            </td>
+                            <td class="text-muted-foreground px-3 py-2">
+                              {{ row.col3 }}
+                            </td>
+                            <td class="text-muted-foreground px-3 py-2">
+                              {{ row.col4 }}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
                     </div>
                     <div
-                      v-else-if="propsFocus === 'tag' && tagDetail"
-                      class="flex gap-1"
+                      v-if="listPagedMode !== 'none' && serverListTotal > 0"
+                      class="flex shrink-0 justify-end border-t px-2 py-1"
                     >
-                      <ElButton size="small" type="danger" @click="onDeleteTag">
-                        {{ $t('scada.workspace.deleteTag') }}
-                      </ElButton>
-                    </div>
-                  </div>
-
-                  <div class="min-h-0 flex-1 overflow-auto p-3">
-                    <div
-                      v-if="propsFocus === 'empty'"
-                      class="text-muted-foreground text-xs"
-                    >
-                      {{ $t('scada.workspace.selectTreeOrList') }}
-                    </div>
-
-                    <ProjectPropsPanel
-                      v-else-if="propsFocus === 'project'"
-                      :key="projectFile || 'project'"
-                      @saved="refresh"
-                    />
-
-                    <template
-                      v-else-if="propsFocus === 'channel' && channelDetail"
-                    >
-                      <ChannelForm
-                        :key="channelDetail.name"
-                        mode="edit"
-                        embed
-                        :show-preview="false"
-                        :initial="channelDetail"
-                        @saved="onChannelPropsSaved"
+                      <ElPagination
+                        v-model:current-page="listPage"
+                        v-model:page-size="listPageSize"
+                        small
+                        background
+                        layout="total, sizes, prev, pager, next"
+                        :page-sizes="[20, 50, 100]"
+                        :total="serverListTotal"
                       />
-                      <p class="text-muted-foreground mt-3 text-xs">
-                        {{ $t('scada.workspace.channelPropsHint') }}
-                      </p>
-                    </template>
+                    </div>
+                  </section>
+                </ResizablePanel>
 
-                    <DevicePropsPanel
-                      v-else-if="
-                        propsFocus === 'device' &&
-                        deviceDetail &&
-                        propsChannelName
-                      "
-                      :channel="propsChannelName"
-                      :driver="selectedChannelDriver"
-                      :device="deviceDetail"
-                      @saved="onDevicePropsSaved"
-                    />
+                <ResizableHandle
+                  class="bg-border hover:bg-primary/40 data-[resize-handle-active]:bg-primary/50 w-1 transition-colors"
+                />
 
-                    <TagForm
-                      v-else-if="
-                        propsFocus === 'tag' &&
-                        tagDetail &&
-                        propsChannelName &&
-                        propsDeviceName
-                      "
-                      embed
-                      :channel="propsChannelName"
-                      :device="propsDeviceName"
-                      :driver="driverForChannel(propsChannelName)"
-                      :edit-name="tagDetail.name"
-                      :show-cancel="false"
-                      :initial="{
-                        name: tagDetail.name,
-                        address: tagDetail.address,
-                        data_type: tagDetail.data_type,
-                        access: tagDetail.access,
-                        description: tagDetail.description,
-                        scan_rate_ms: tagDetail.scan_rate_ms,
-                        respect_client_type: tagDetail.respect_client_type,
-                        scaling: tagDetail.scaling,
-                        group: tagDetail.group_path,
-                      }"
-                      @submit="onTagSubmit"
-                    />
-                  </div>
-                </aside>
-              </ResizablePanel>
+                <ResizablePanel
+                  :default-size="28"
+                  :min-size="16"
+                  :max-size="50"
+                >
+                  <aside
+                    class="flex h-full min-h-0 flex-col overflow-hidden"
+                    v-loading="detailLoading"
+                  >
+                    <div
+                      class="bg-muted/30 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b px-3 py-2"
+                    >
+                      <span class="text-xs font-medium">
+                        {{ $t('scada.workspace.propertySheet') }}
+                        <span
+                          v-if="propsFocus !== 'empty'"
+                          class="text-muted-foreground font-normal"
+                        >
+                          ·
+                          {{
+                            propsFocus === 'project'
+                              ? projectTitle
+                              : propsFocus === 'channel'
+                                ? channelDetail?.name || propsChannelName
+                                : propsFocus === 'device'
+                                  ? deviceDetail?.name || propsDeviceName
+                                  : tagDetail?.name
+                          }}
+                        </span>
+                      </span>
+                      <div
+                        v-if="propsFocus === 'device' && deviceDetail"
+                        class="flex flex-wrap gap-1"
+                      >
+                        <ElButton
+                          size="small"
+                          type="primary"
+                          @click="openCreateTagDialog"
+                        >
+                          {{ $t('scada.workspace.newTag') }}
+                        </ElButton>
+                        <ElButton size="small" @click="onToggleEnabled">
+                          {{
+                            deviceDetail.enabled
+                              ? $t('scada.workspace.disable')
+                              : $t('scada.workspace.enable')
+                          }}
+                        </ElButton>
+                        <ElButton size="small" @click="onReinit">
+                          {{ $t('scada.workspace.reinit') }}
+                        </ElButton>
+                        <ElButton
+                          size="small"
+                          type="danger"
+                          @click="onDeleteDevice"
+                        >
+                          {{ $t('scada.workspace.deleteDevice') }}
+                        </ElButton>
+                      </div>
+                      <div
+                        v-else-if="propsFocus === 'tag' && tagDetail"
+                        class="flex gap-1"
+                      >
+                        <ElButton
+                          size="small"
+                          type="danger"
+                          @click="onDeleteTag"
+                        >
+                          {{ $t('scada.workspace.deleteTag') }}
+                        </ElButton>
+                      </div>
+                    </div>
+
+                    <div class="min-h-0 flex-1 overflow-auto p-3">
+                      <div
+                        v-if="propsFocus === 'empty'"
+                        class="text-muted-foreground text-xs"
+                      >
+                        {{ $t('scada.workspace.selectTreeOrList') }}
+                      </div>
+
+                      <ProjectPropsPanel
+                        v-else-if="propsFocus === 'project'"
+                        :key="projectFile || 'project'"
+                        @saved="refresh"
+                      />
+
+                      <template
+                        v-else-if="propsFocus === 'channel' && channelDetail"
+                      >
+                        <ChannelForm
+                          :key="channelDetail.name"
+                          mode="edit"
+                          embed
+                          :show-preview="false"
+                          :initial="channelDetail"
+                          @saved="onChannelPropsSaved"
+                        />
+                        <p class="text-muted-foreground mt-3 text-xs">
+                          {{ $t('scada.workspace.channelPropsHint') }}
+                        </p>
+                      </template>
+
+                      <DevicePropsPanel
+                        v-else-if="
+                          propsFocus === 'device' &&
+                          deviceDetail &&
+                          propsChannelName
+                        "
+                        :channel="propsChannelName"
+                        :driver="selectedChannelDriver"
+                        :device="deviceDetail"
+                        @saved="onDevicePropsSaved"
+                      />
+
+                      <TagForm
+                        v-else-if="
+                          propsFocus === 'tag' &&
+                          tagDetail &&
+                          propsChannelName &&
+                          propsDeviceName
+                        "
+                        embed
+                        :channel="propsChannelName"
+                        :device="propsDeviceName"
+                        :driver="driverForChannel(propsChannelName)"
+                        :edit-name="tagDetail.name"
+                        :show-cancel="false"
+                        :initial="{
+                          name: tagDetail.name,
+                          address: tagDetail.address,
+                          data_type: tagDetail.data_type,
+                          access: tagDetail.access,
+                          description: tagDetail.description,
+                          scan_rate_ms: tagDetail.scan_rate_ms,
+                          respect_client_type: tagDetail.respect_client_type,
+                          scaling: tagDetail.scaling,
+                          group: tagDetail.group_path,
+                        }"
+                        @submit="onTagSubmit"
+                      />
+                    </div>
+                  </aside>
+                </ResizablePanel>
+              </template>
             </ResizablePanelGroup>
           </ResizablePanel>
 

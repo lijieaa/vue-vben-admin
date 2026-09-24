@@ -436,12 +436,17 @@ export function fetchProject() {
     channel_count: number;
     rule_count: number;
     virtual_network_mode: string;
+    mqtt_slug?: string;
+    mqtt_slug_effective?: string;
+    mqtt_vtq_by_device?: boolean;
   }>('/api/v1/project');
 }
 
 export function patchProject(patch: {
   title?: string;
   virtual_network_mode?: string;
+  mqtt_slug?: string;
+  mqtt_vtq_by_device?: boolean;
 }) {
   return scadaClient.request<{
     title: string;
@@ -449,6 +454,9 @@ export function patchProject(patch: {
     channel_count: number;
     rule_count: number;
     virtual_network_mode: string;
+    mqtt_slug?: string;
+    mqtt_slug_effective?: string;
+    mqtt_vtq_by_device?: boolean;
   }>('/api/v1/project', {
     method: 'PATCH',
     data: patch,

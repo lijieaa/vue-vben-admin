@@ -37,6 +37,7 @@
     "connected": "runtime 已连接",
     "disconnected": "runtime 未连接",
     "channels": "通道",
+    "alarmsRoot": "报警与事件",
     "channelList": "详情",
     "empty": "暂无通道。点击「新建通道」调用 POST /api/v1/channels。",
     "selectChannel": "在左侧选择通道或设备查看详情。",
@@ -438,10 +439,14 @@
     "saveFailed": "保存工程设置失败",
     "fields": {
       "title": "工程标题",
-      "virtualNetworkMode": "虚拟网络调度"
+      "virtualNetworkMode": "虚拟网络调度",
+      "mqttSlug": "MQTT 命名空间",
+      "mqttVtqByDevice": "按设备推送 VTQ"
     },
     "hints": {
-      "virtualNetworkMode": "影响共用虚拟网络通道的令牌调度方式（负载均衡 / 优先级）。"
+      "virtualNetworkMode": "影响共用虚拟网络通道的令牌调度方式（负载均衡 / 优先级）。",
+      "mqttSlug": "用于 scada/{slug}/... 话题。仅 a-z、0-9、-、_；留空则按标题推导（中文标题会变成 default）。",
+      "mqttVtqByDevice": "开启后，MQTT 北向按设备发送一条全量标签快照；关闭则按标签逐条推送。"
     }
   },
   "alarms": {
@@ -482,6 +487,7 @@
     "ackFailed": "确认失败",
     "emptyTree": "暂无 Area，点击添加",
     "selectNode": "在左侧选择节点进行编辑",
+    "selectFromTree": "在工程树中选择「报警与事件」节点进行编辑",
     "typeValue": "值比较",
     "typeDeviation": "偏差",
     "typeRoc": "变化率"

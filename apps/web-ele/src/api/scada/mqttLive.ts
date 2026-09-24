@@ -46,6 +46,15 @@ export function vtqTopic(slug: string, path: string): string {
   return `scada/${slug || 'default'}/vtq/${path.split('.').join('/')}`;
 }
 
+/** Exact device-level VTQ topic (mqtt_vtq_by_device snapshot). */
+export function vtqDeviceTopic(
+  slug: string,
+  channel: string,
+  device: string,
+): string {
+  return `scada/${slug || 'default'}/vtq/${channel}/${device}`;
+}
+
 export function writeTopic(slug: string): string {
   return `scada/${slug || 'default'}/write`;
 }
@@ -211,57 +220,22 @@ export class ScadaMqttLive {
   }
 
   /**
+   * Subscribe one device-level VTQ topic (mqtt_vtq_by_device mode).
+   * Scan gating expands to all IO tags under the device on the broker side.
+   */
+  async subscribeDeviceVTQ(channel: string, device: string): Promise<boolean> {
+    if (!channel || !device) return false;
+    return this.replaceTopics([vtqDeviceTopic(this.slug, channel, device)]);
+  }
+
+  /**
    * Subscribe exact VTQ topics for the given tag paths (current list page).
    * Avoid device `#` wildcards — those expand to every tag and stall the broker.
    */
   async subscribeTagPaths(paths: string[]): Promise<boolean> {
-    const ok = await this.ensureConnected();
-    if (!ok || !this.client) return false;
     const uniq = [...new Set(paths.filter(Boolean))];
     const nextTopics = uniq.map((p) => vtqTopic(this.slug, p));
-    const seq = ++this.subscribeSeq;
-    const client = this.client;
-
-    const prev = this.activeTopics;
-    const prevSet = new Set(prev);
-    const nextSet = new Set(nextTopics);
-    const drop = prev.filter((t) => !nextSet.has(t));
-    const add = nextTopics.filter((t) => !prevSet.has(t));
-    this.activeTopics = nextTopics;
-
-    if (drop.length > 0) {
-      try {
-        client.unsubscribe(drop);
-      } catch {
-        // ignore
-      }
-    }
-    if (add.length === 0) return true;
-
-    await new Promise<void>((resolve) => {
-      let done = false;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        resolve();
-      };
-      const timer = setTimeout(finish, 2000);
-      try {
-        client.subscribe(add, { qos: 0 }, () => {
-          if (seq !== this.subscribeSeq) {
-            clearTimeout(timer);
-            finish();
-            return;
-          }
-          clearTimeout(timer);
-          finish();
-        });
-      } catch {
-        clearTimeout(timer);
-        finish();
-      }
-    });
-    return seq === this.subscribeSeq;
+    return this.replaceTopics(nextTopics);
   }
 
   /** Single-tag write: publish {path,value}, wait matching write/ack. */
@@ -380,12 +354,54 @@ export class ScadaMqttLive {
     const path = pathFromVtqTopic(this.slug, topic);
     if (!path) return;
     try {
-      const body = JSON.parse(text) as ScadaMqttSample;
+      const body = JSON.parse(text) as Record<string, unknown>;
+      const tags = body.tags;
+      if (tags && typeof tags === 'object' && !Array.isArray(tags)) {
+        const channel =
+          body.channel === null || body.channel === undefined
+            ? ''
+            : String(body.channel);
+        const device =
+          body.device === null || body.device === undefined
+            ? ''
+            : String(body.device);
+        let prefix = '';
+        if (channel && device) {
+          prefix = `${channel}.${device}.`;
+        } else if (path.includes('.')) {
+          prefix = `${path}.`;
+        }
+        for (const [rel, row] of Object.entries(
+          tags as Record<string, unknown>,
+        )) {
+          if (!row || typeof row !== 'object') continue;
+          const sample = row as Record<string, unknown>;
+          this.handler({
+            path: prefix ? `${prefix}${rel}` : rel,
+            value: sample.value,
+            quality:
+              sample.quality === null || sample.quality === undefined
+                ? undefined
+                : (sample.quality as number | string),
+            ts:
+              sample.ts === null || sample.ts === undefined
+                ? undefined
+                : String(sample.ts),
+          });
+        }
+        return;
+      }
       this.handler({
-        path: body.path || path,
+        path: (body.path as string) || path,
         value: body.value,
-        quality: body.quality,
-        ts: body.ts,
+        quality:
+          body.quality === null || body.quality === undefined
+            ? undefined
+            : (body.quality as number | string),
+        ts:
+          body.ts === null || body.ts === undefined
+            ? undefined
+            : String(body.ts),
       });
     } catch {
       // ignore bad payload
@@ -443,6 +459,54 @@ export class ScadaMqttLive {
       this.pendingAcks.delete(waiter);
       waiter.reject(err);
     }
+  }
+
+  private async replaceTopics(nextTopics: string[]): Promise<boolean> {
+    const ok = await this.ensureConnected();
+    if (!ok || !this.client) return false;
+    const seq = ++this.subscribeSeq;
+    const client = this.client;
+
+    const prev = this.activeTopics;
+    const prevSet = new Set(prev);
+    const nextSet = new Set(nextTopics);
+    const drop = prev.filter((t) => !nextSet.has(t));
+    const add = nextTopics.filter((t) => !prevSet.has(t));
+    this.activeTopics = nextTopics;
+
+    if (drop.length > 0) {
+      try {
+        client.unsubscribe(drop);
+      } catch {
+        // ignore
+      }
+    }
+    if (add.length === 0) return true;
+
+    await new Promise<void>((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        resolve();
+      };
+      const timer = setTimeout(finish, 2000);
+      try {
+        client.subscribe(add, { qos: 0 }, () => {
+          if (seq !== this.subscribeSeq) {
+            clearTimeout(timer);
+            finish();
+            return;
+          }
+          clearTimeout(timer);
+          finish();
+        });
+      } catch {
+        clearTimeout(timer);
+        finish();
+      }
+    });
+    return seq === this.subscribeSeq;
   }
 }
 
