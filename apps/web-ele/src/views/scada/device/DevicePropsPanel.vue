@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import type { ModbusDeviceForm } from './modbusDeviceFields';
+import type { S7DeviceForm } from './s7DeviceFields';
 
 import type {
   ScadaDeviceInfo,
@@ -39,6 +40,12 @@ import {
   modbusSettingsPayload,
 } from './modbusDeviceFields';
 import ModbusDeviceFields from './ModbusDeviceFields.vue';
+import {
+  defaultS7DeviceForm,
+  hydrateS7DeviceForm,
+  s7SettingsPayload,
+} from './s7DeviceFields';
+import S7DeviceFields from './S7DeviceFields.vue';
 
 const props = defineProps<{
   channel: string;
@@ -65,6 +72,7 @@ const MODBUS_GROUPS = [
   'mbImport',
   'mbError',
 ] as const;
+const S7_GROUPS = ['s7Comm', 's7Address', 's7Import'] as const;
 
 const submitting = ref(false);
 const loadingMeta = ref(false);
@@ -99,10 +107,14 @@ const form = reactive({
 });
 
 const mb = reactive<ModbusDeviceForm>(defaultModbusDeviceForm());
+const s7 = reactive<S7DeviceForm>(defaultS7DeviceForm());
 const isModbus = computed(() => props.driver === 'modbus_tcp');
-const groupKeys = computed(() =>
-  isModbus.value ? [...HOST_GROUPS, ...MODBUS_GROUPS] : [...HOST_GROUPS],
-);
+const isS7 = computed(() => props.driver === 's7_tcp');
+const groupKeys = computed(() => {
+  if (isModbus.value) return [...HOST_GROUPS, ...MODBUS_GROUPS];
+  if (isS7.value) return [...HOST_GROUPS, ...S7_GROUPS];
+  return [...HOST_GROUPS];
+});
 
 const propertyGroupItems = computed(() =>
   groupKeys.value.map((key) => ({
@@ -167,6 +179,7 @@ function hydrate(info: ScadaDeviceInfo) {
   form.autoTagParentGroup = asStr(s.auto_tag_parent_group, '');
   form.autoTagAllowSubgroups = asBool(s.auto_tag_allow_subgroups, true);
   Object.assign(mb, hydrateModbusDeviceForm(s));
+  Object.assign(s7, hydrateS7DeviceForm(s, form.model));
 }
 
 watch(
@@ -258,6 +271,7 @@ async function onSave() {
           discard_writes: form.discardWrites,
         },
         ...(isModbus.value ? modbusSettingsPayload(mb) : {}),
+        ...(isS7.value ? s7SettingsPayload(s7) : {}),
       },
     });
     ElMessage.success($t('scada.device.success.patched'));
@@ -282,7 +296,13 @@ onMounted(() => {
       <span class="text-muted-foreground">{{ $t('scada.device.fields.status') }}:</span>
       <ElTag
         size="small"
-        :type="device.status === 'online' ? 'success' : 'info'"
+        :type="
+          device.status === 'online'
+            ? 'success'
+            : device.status === 'error' || device.status === 'offline'
+              ? 'danger'
+              : 'info'
+        "
       >
         {{ device.status || '-' }}
       </ElTag>
@@ -511,6 +531,15 @@ onMounted(() => {
         </template>
         <template v-if="isModbus" #mbError>
           <ModbusDeviceFields v-model="mb" group="mbError" />
+        </template>
+        <template v-if="isS7" #s7Comm>
+          <S7DeviceFields v-model="s7" :model="form.model" group="s7Comm" />
+        </template>
+        <template v-if="isS7" #s7Address>
+          <S7DeviceFields v-model="s7" :model="form.model" group="s7Address" />
+        </template>
+        <template v-if="isS7" #s7Import>
+          <S7DeviceFields v-model="s7" :model="form.model" group="s7Import" />
         </template>
       </PropertySheet>
     </ElForm>

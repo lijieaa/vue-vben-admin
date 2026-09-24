@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import type { ModbusDeviceForm } from './modbusDeviceFields';
+import type { S7DeviceForm } from './s7DeviceFields';
 
 import type {
   ScadaDeviceCreateBody,
@@ -39,6 +40,8 @@ import {
   modbusSettingsPayload,
 } from './modbusDeviceFields';
 import ModbusDeviceFields from './ModbusDeviceFields.vue';
+import { defaultS7DeviceForm, s7SettingsPayload } from './s7DeviceFields';
+import S7DeviceFields from './S7DeviceFields.vue';
 
 const props = defineProps<{
   channel: string;
@@ -67,6 +70,7 @@ const MODBUS_GROUPS = [
   'mbImport',
   'mbError',
 ] as const;
+const S7_GROUPS = ['s7Comm', 's7Address', 's7Import'] as const;
 
 const stepIndex = ref(0);
 const submitting = ref(false);
@@ -74,11 +78,15 @@ const loadingMeta = ref(false);
 const models = ref<ScadaModelInfo[]>([]);
 const schemaFields = ref<Record<string, SchemaField>>({});
 const mb = reactive<ModbusDeviceForm>(defaultModbusDeviceForm());
+const s7 = reactive<S7DeviceForm>(defaultS7DeviceForm());
 
 const isModbus = computed(() => props.driver === 'modbus_tcp');
-const groupKeys = computed(() =>
-  isModbus.value ? [...HOST_GROUPS, ...MODBUS_GROUPS] : [...HOST_GROUPS],
-);
+const isS7 = computed(() => props.driver === 's7_tcp');
+const groupKeys = computed(() => {
+  if (isModbus.value) return [...HOST_GROUPS, ...MODBUS_GROUPS];
+  if (isS7.value) return [...HOST_GROUPS, ...S7_GROUPS];
+  return [...HOST_GROUPS];
+});
 
 const form = reactive({
   id: '',
@@ -196,6 +204,7 @@ const payload = computed<ScadaDeviceCreateBody>(() => ({
       discard_writes: form.discardWrites,
     },
     ...(isModbus.value ? modbusSettingsPayload(mb) : {}),
+    ...(isS7.value ? s7SettingsPayload(s7) : {}),
   },
   tags: [],
 }));
@@ -243,6 +252,15 @@ watch(
   },
 );
 
+watch(
+  () => form.model,
+  (model) => {
+    if (isS7.value) {
+      Object.assign(s7, defaultS7DeviceForm(model));
+    }
+  },
+);
+
 function validateStep(key: StepKey): null | string {
   if (key === 'name' && !form.name.trim()) {
     return $t('scada.device.errors.nameRequired');
@@ -285,6 +303,7 @@ function onReset() {
   form.timeoutMs = 1000;
   form.retries = 3;
   Object.assign(mb, defaultModbusDeviceForm());
+  Object.assign(s7, defaultS7DeviceForm(form.model));
   applyDefaults(schemaFields.value);
   stepIndex.value = 0;
 }
@@ -580,6 +599,19 @@ onMounted(() => {
           </template>
           <template v-if="isModbus" #mbError>
             <ModbusDeviceFields v-model="mb" group="mbError" />
+          </template>
+          <template v-if="isS7" #s7Comm>
+            <S7DeviceFields v-model="s7" :model="form.model" group="s7Comm" />
+          </template>
+          <template v-if="isS7" #s7Address>
+            <S7DeviceFields
+              v-model="s7"
+              :model="form.model"
+              group="s7Address"
+            />
+          </template>
+          <template v-if="isS7" #s7Import>
+            <S7DeviceFields v-model="s7" :model="form.model" group="s7Import" />
           </template>
         </PropertySheet>
       </div>
