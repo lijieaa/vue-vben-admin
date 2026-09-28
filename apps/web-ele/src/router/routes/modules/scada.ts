@@ -36,8 +36,9 @@ const routes: RouteRecordRaw[] = [
       {
         name: 'ScadaAlarms',
         path: 'alarms',
-        component: () => import('#/views/scada/alarms/index.vue'),
+        redirect: { name: 'ScadaWorkspace', query: { focus: 'alarms' } },
         meta: {
+          hideInMenu: true,
           icon: 'lucide:bell',
           title: $t('scada.menu.alarms'),
         },
