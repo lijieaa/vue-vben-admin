@@ -20,11 +20,11 @@ export default defineConfig(async () => {
             target: 'http://localhost:5320/api',
             ws: true,
           },
-          // scada-engine management API (default -http :8080)
+          // scada-engine management API (default -http :8888)
           '/scada-api': {
             changeOrigin: true,
             rewrite: (path) => path.replace(/^\/scada-api/, ''),
-            target: 'http://localhost:8080',
+            target: 'http://localhost:8888',
             ws: true,
           },
           // Optional same-origin proxy; prefer VITE_SCADA_MQTT_URL direct WS in .env.development

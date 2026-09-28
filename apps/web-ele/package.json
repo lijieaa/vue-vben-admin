@@ -20,7 +20,12 @@
     "build:analyze": "pnpm vite build --mode analyze",
     "dev": "pnpm vite --mode development",
     "preview": "vite preview",
-    "typecheck": "vue-tsc --noEmit --skipLibCheck"
+    "typecheck": "vue-tsc --noEmit --skipLibCheck",
+    "test:e2e": "playwright test",
+    "test:e2e-ui": "playwright test --ui",
+    "test:e2e:s7": "playwright test e2e/s7-device-form.spec.ts",
+    "test:e2e:s7-tag": "playwright test e2e/s7-tag-create.spec.ts",
+    "test:e2e:s7-seelink": "playwright test e2e/s7-seelink-v1501.spec.ts"
   },
   "imports": {
     "#/*": "./src/*"
@@ -49,6 +54,7 @@
     "vue-router": "catalog:"
   },
   "devDependencies": {
+    "@playwright/test": "catalog:",
     "unplugin-element-plus": "catalog:"
   }
 }
