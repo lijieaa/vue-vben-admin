@@ -533,6 +533,17 @@ function driverForChannel(name: string) {
   );
 }
 
+function modelForDevice(channel: string, device: string) {
+  if (
+    deviceDetail.value?.model &&
+    (deviceDetail.value.name === device || deviceDetail.value.id === device)
+  ) {
+    return deviceDetail.value.model;
+  }
+  const list = devicesByChannel.value[channel] ?? [];
+  return list.find((d) => d.name === device || d.id === device)?.model || '';
+}
+
 /** Children of the tree selection. */
 const listRows = computed<ListRow[]>(() => {
   const n = treeSelected.value;
@@ -2654,6 +2665,9 @@ function onMenuCommand(cmd: string) {
                         :channel="propsChannelName"
                         :device="propsDeviceName"
                         :driver="driverForChannel(propsChannelName)"
+                        :model="
+                          modelForDevice(propsChannelName, propsDeviceName)
+                        "
                         :edit-name="tagDetail.name"
                         :show-cancel="false"
                         :initial="{
@@ -2843,6 +2857,12 @@ function onMenuCommand(cmd: string) {
         :channel="propsChannelName || treeChannelName"
         :device="propsDeviceName || treeDeviceName"
         :driver="driverForChannel(propsChannelName || treeChannelName)"
+        :model="
+          modelForDevice(
+            propsChannelName || treeChannelName,
+            propsDeviceName || treeDeviceName,
+          )
+        "
         @submit="onTagSubmit"
         @cancel="createTagVisible = false"
       />

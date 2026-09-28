@@ -33,6 +33,8 @@ const props = withDefaults(
     device: string;
     /** Driver name used to load the address dropdown. */
     driver?: string;
+    /** Device model ID; filters address hints when the driver supports it. */
+    model?: string;
     /** When set, dialog edits an existing tag (PATCH). */
     editName?: string;
     initial?: Partial<ScadaTag>;
@@ -42,6 +44,7 @@ const props = withDefaults(
   }>(),
   {
     driver: '',
+    model: '',
     editName: '',
     initial: () => ({}),
     showCancel: true,
@@ -155,7 +158,7 @@ async function loadAddressHints() {
     return;
   }
   try {
-    const help = await fetchDriverAddressHelp(props.driver);
+    const help = await fetchDriverAddressHelp(props.driver, props.model);
     if (help.hints?.length) {
       addressHints.value = help.hints;
       return;
@@ -238,7 +241,7 @@ watch(
 );
 
 watch(
-  () => props.driver,
+  () => [props.driver, props.model] as const,
   () => {
     void loadAddressHints();
   },

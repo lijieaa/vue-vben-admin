@@ -242,13 +242,15 @@ export interface ScadaAddressHint {
   data_type?: string;
 }
 
-export function fetchDriverAddressHelp(name: string) {
+export function fetchDriverAddressHelp(name: string, model?: string) {
+  const q =
+    model && model.trim() ? `?model=${encodeURIComponent(model.trim())}` : '';
   return scadaClient.get<{
     dialect?: string;
     examples?: string[];
     hints?: ScadaAddressHint[];
     notes?: string;
-  }>(`/api/v1/drivers/${encodeURIComponent(name)}/tag-address-help`);
+  }>(`/api/v1/drivers/${encodeURIComponent(name)}/tag-address-help${q}`);
 }
 
 export function fetchNetworkAdapters() {
