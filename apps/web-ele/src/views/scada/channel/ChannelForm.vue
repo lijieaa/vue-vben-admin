@@ -86,6 +86,8 @@ const networkAdapters = ref<ScadaNetworkAdapter[]>([]);
 const writeOptValues = ref<Array<boolean | number | string>>([]);
 const floatValues = ref<Array<boolean | number | string>>([]);
 const virtualNetworkValues = ref<Array<boolean | number | string>>([]);
+/** Caps-filtered host channel fields for the current driver. */
+const hostFields = ref<Record<string, SchemaField>>({});
 
 const form = reactive({
   id: '',
@@ -115,7 +117,30 @@ const currentStep = computed(() =>
 const isLast = computed(() => stepIndex.value === STEP_KEYS.length - 1);
 const isModbusDriver = computed(() => form.driver === 'modbus_tcp');
 
+const showFloatHandling = computed(() => !!hostFields.value.float_handling);
+const showInterDeviceDelay = computed(
+  () => !!hostFields.value.inter_device_delay_ms,
+);
+const showVirtualNetwork = computed(() => !!hostFields.value.virtual_network);
+const showTransactionsPerCycle = computed(
+  () => !!hostFields.value.transactions_per_cycle,
+);
+const interDeviceDelayMax = computed(
+  () => hostFields.value.inter_device_delay_ms?.max ?? 60_000,
+);
+const transactionsPerCycleMax = computed(
+  () => hostFields.value.transactions_per_cycle?.max ?? 99,
+);
+
 const virtualNetworkEnabled = computed(() => Number(form.virtualNetwork) > 0);
+const transactionsPerCycleEnabled = computed(() => {
+  const field = hostFields.value.transactions_per_cycle;
+  if (!field) return false;
+  if (field.enabled_when === 'virtual_network_nonzero') {
+    return virtualNetworkEnabled.value;
+  }
+  return true;
+});
 const maxSocketsDisabled = computed(
   () => !form.useMultipleSockets || virtualNetworkEnabled.value,
 );
@@ -168,6 +193,20 @@ const groupTitle = (key: GroupKey) => $t(`scada.channel.groups.${key}`);
 function groupSkipped(key: GroupKey): boolean {
   if (key === 'modbus' && !isModbusDriver.value) return true;
   if (key === 'ethernet' && form.driver === 'simulator') return true;
+  if (
+    key === 'advanced' &&
+    !showFloatHandling.value &&
+    !showInterDeviceDelay.value
+  ) {
+    return true;
+  }
+  if (
+    key === 'serialization' &&
+    !showVirtualNetwork.value &&
+    !showTransactionsPerCycle.value
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -196,40 +235,50 @@ watch(
   () => form.driver,
   async (driver) => {
     if (!driver) return;
+    await applyHostSchema(driver, !isEdit.value);
     await loadDriverSchema(driver);
   },
 );
 
-const payload = computed<ChannelPayload>(() => ({
-  id: form.id.trim() || form.name.trim(),
-  name: form.name.trim(),
-  description: form.description.trim(),
-  driver: form.driver,
-  medium: {
-    kind: form.driver === 'simulator' ? 'none' : 'ethernet',
-    host: form.host.trim(),
-    port: form.port,
-  },
-  settings: {
+const payload = computed<ChannelPayload>(() => {
+  const settings: Record<string, unknown> = {
     write_optimization: form.writeOptimization,
     max_consecutive_writes: form.maxConsecutiveWrites,
-    inter_device_delay_ms: form.interDeviceDelayMs,
-    float_handling: form.floatHandling,
     network_adapter: form.networkAdapter,
     diagnostics_enabled: form.diagnosticsEnabled,
-    virtual_network: Number(form.virtualNetwork),
-    transactions_per_cycle: form.transactionsPerCycle,
-    ...(isModbusDriver.value
-      ? {
-          use_multiple_sockets: form.useMultipleSockets,
-          max_sockets_per_device: form.maxSocketsPerDevice,
-          global_unsolicited_port: form.globalUnsolicitedPort,
-          global_unsolicited_protocol: form.globalUnsolicitedProtocol,
-        }
-      : {}),
-  },
-  devices: [],
-}));
+  };
+  if (showInterDeviceDelay.value) {
+    settings.inter_device_delay_ms = form.interDeviceDelayMs;
+  }
+  if (showFloatHandling.value) {
+    settings.float_handling = form.floatHandling;
+  }
+  if (showVirtualNetwork.value) {
+    settings.virtual_network = Number(form.virtualNetwork);
+  }
+  if (showTransactionsPerCycle.value) {
+    settings.transactions_per_cycle = form.transactionsPerCycle;
+  }
+  if (isModbusDriver.value) {
+    settings.use_multiple_sockets = form.useMultipleSockets;
+    settings.max_sockets_per_device = form.maxSocketsPerDevice;
+    settings.global_unsolicited_port = form.globalUnsolicitedPort;
+    settings.global_unsolicited_protocol = form.globalUnsolicitedProtocol;
+  }
+  return {
+    id: form.id.trim() || form.name.trim(),
+    name: form.name.trim(),
+    description: form.description.trim(),
+    driver: form.driver,
+    medium: {
+      kind: form.driver === 'simulator' ? 'none' : 'ethernet',
+      host: form.host.trim(),
+      port: form.port,
+    },
+    settings,
+    devices: [],
+  };
+});
 
 const previewJson = computed(() => JSON.stringify(payload.value, null, 2));
 
@@ -282,34 +331,53 @@ async function loadDriverSchema(driver: string) {
   }
 }
 
+function applyHostFields(
+  fields: Record<string, SchemaField>,
+  applyDefaults: boolean,
+) {
+  hostFields.value = fields;
+  writeOptValues.value = valuesFromField(fields.write_optimization);
+  floatValues.value = valuesFromField(fields.float_handling);
+  virtualNetworkValues.value = valuesFromField(fields.virtual_network);
+  if (!applyDefaults) return;
+  applyFieldDefault(fields.write_optimization, 'writeOptimization');
+  applyFieldDefault(fields.max_consecutive_writes, 'maxConsecutiveWrites');
+  applyFieldDefault(fields.float_handling, 'floatHandling');
+  applyFieldDefault(fields.inter_device_delay_ms, 'interDeviceDelayMs');
+  applyFieldDefault(fields.network_adapter, 'networkAdapter');
+  applyFieldDefault(fields.diagnostics_enabled, 'diagnosticsEnabled');
+  applyFieldDefault(fields.virtual_network, 'virtualNetwork');
+  applyFieldDefault(fields.transactions_per_cycle, 'transactionsPerCycle');
+  if (!fields.virtual_network) {
+    form.virtualNetwork = 0;
+  }
+  if (!fields.transactions_per_cycle) {
+    form.transactionsPerCycle = 1;
+  }
+}
+
+async function applyHostSchema(driver: string, applyDefaults: boolean) {
+  try {
+    const common = await fetchChannelSettingsSchema(driver);
+    applyHostFields(common.fields ?? {}, applyDefaults);
+  } catch {
+    // keep previous hostFields
+  }
+}
+
 async function loadMeta() {
   loadingMeta.value = true;
   try {
-    const [driverList, adapters, common] = await Promise.all([
+    const [driverList, adapters] = await Promise.all([
       fetchDrivers(),
       fetchNetworkAdapters(),
-      fetchChannelSettingsSchema(),
     ]);
     drivers.value = driverList ?? [];
     networkAdapters.value = adapters?.length
       ? adapters
       : [{ value: 'default', ip: '', name: 'Default' }];
 
-    const fields = common.fields ?? {};
-    writeOptValues.value = valuesFromField(fields.write_optimization);
-    floatValues.value = valuesFromField(fields.float_handling);
-    virtualNetworkValues.value = valuesFromField(fields.virtual_network);
-
     if (!isEdit.value) {
-      applyFieldDefault(fields.write_optimization, 'writeOptimization');
-      applyFieldDefault(fields.max_consecutive_writes, 'maxConsecutiveWrites');
-      applyFieldDefault(fields.float_handling, 'floatHandling');
-      applyFieldDefault(fields.inter_device_delay_ms, 'interDeviceDelayMs');
-      applyFieldDefault(fields.network_adapter, 'networkAdapter');
-      applyFieldDefault(fields.diagnostics_enabled, 'diagnosticsEnabled');
-      applyFieldDefault(fields.virtual_network, 'virtualNetwork');
-      applyFieldDefault(fields.transactions_per_cycle, 'transactionsPerCycle');
-
       if (
         drivers.value.length > 0 &&
         !drivers.value.some((d) => d.name === form.driver)
@@ -317,6 +385,12 @@ async function loadMeta() {
         const first = drivers.value[0];
         if (first) form.driver = first.name;
       }
+    } else if (props.initial?.driver) {
+      form.driver = props.initial.driver;
+    }
+
+    await applyHostSchema(form.driver, !isEdit.value);
+    if (!isEdit.value) {
       await loadDriverSchema(form.driver);
     }
     metaReady.value = true;
@@ -350,7 +424,18 @@ function validateStep(key: StepKey): null | string {
       if (form.maxConsecutiveWrites < 1 || form.maxConsecutiveWrites > 10) {
         return $t('scada.channel.errors.dutyInvalid');
       }
-      if (form.transactionsPerCycle < 1 || form.transactionsPerCycle > 99) {
+      if (
+        showInterDeviceDelay.value &&
+        (form.interDeviceDelayMs < 0 ||
+          form.interDeviceDelayMs > interDeviceDelayMax.value)
+      ) {
+        return $t('scada.channel.errors.delayInvalid');
+      }
+      if (
+        showTransactionsPerCycle.value &&
+        (form.transactionsPerCycle < 1 ||
+          form.transactionsPerCycle > transactionsPerCycleMax.value)
+      ) {
         return $t('scada.channel.errors.txnInvalid');
       }
       return null;
@@ -668,7 +753,10 @@ defineExpose({ payload, onSubmit, onReset, loadMeta });
           </template>
 
           <template #advanced>
-            <ElFormItem :label="$t('scada.channel.fields.floatHandling')">
+            <ElFormItem
+              v-if="showFloatHandling"
+              :label="$t('scada.channel.fields.floatHandling')"
+            >
               <ElSelect v-model="form.floatHandling" class="w-full">
                 <ElOption
                   v-for="o in floatOptions"
@@ -678,10 +766,14 @@ defineExpose({ payload, onSubmit, onReset, loadMeta });
                 />
               </ElSelect>
             </ElFormItem>
-            <ElFormItem :label="$t('scada.channel.fields.interDeviceDelay')">
+            <ElFormItem
+              v-if="showInterDeviceDelay"
+              :label="$t('scada.channel.fields.interDeviceDelay')"
+            >
               <ElInputNumber
                 v-model="form.interDeviceDelayMs"
                 :min="0"
+                :max="interDeviceDelayMax"
                 class="w-full!"
                 controls-position="right"
               />
@@ -692,7 +784,10 @@ defineExpose({ payload, onSubmit, onReset, loadMeta });
             <div class="text-muted-foreground mb-2 text-xs">
               {{ $t('scada.channel.sections.channelLevel') }}
             </div>
-            <ElFormItem :label="$t('scada.channel.fields.virtualNetwork')">
+            <ElFormItem
+              v-if="showVirtualNetwork"
+              :label="$t('scada.channel.fields.virtualNetwork')"
+            >
               <ElSelect v-model="form.virtualNetwork" class="w-full" filterable>
                 <ElOption
                   v-for="o in virtualNetworkOptions"
@@ -703,13 +798,14 @@ defineExpose({ payload, onSubmit, onReset, loadMeta });
               </ElSelect>
             </ElFormItem>
             <ElFormItem
+              v-if="showTransactionsPerCycle"
               :label="$t('scada.channel.fields.transactionsPerCycle')"
             >
               <ElInputNumber
                 v-model="form.transactionsPerCycle"
                 :min="1"
-                :max="99"
-                :disabled="!virtualNetworkEnabled"
+                :max="transactionsPerCycleMax"
+                :disabled="!transactionsPerCycleEnabled"
                 class="w-full!"
                 controls-position="right"
               />
@@ -810,6 +906,7 @@ defineExpose({ payload, onSubmit, onReset, loadMeta });
             {{ optionLabel(form.writeOptimization) }}
           </ElDescriptionsItem>
           <ElDescriptionsItem
+            v-if="showVirtualNetwork"
             :label="$t('scada.channel.fields.virtualNetwork')"
           >
             {{ optionLabel(form.virtualNetwork) }}

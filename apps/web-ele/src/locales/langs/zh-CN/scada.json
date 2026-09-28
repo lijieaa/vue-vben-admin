@@ -195,6 +195,7 @@
       "hostRequired": "主机地址不能为空",
       "portInvalid": "端口无效",
       "dutyInvalid": "占空比须为 1..10",
+      "delayInvalid": "设备间延迟须为 0..60000 毫秒",
       "txnInvalid": "每周期事务数须为 1..99",
       "metaFailed": "加载通道元数据失败",
       "createFailed": "创建失败",

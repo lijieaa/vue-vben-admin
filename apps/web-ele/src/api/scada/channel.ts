@@ -114,6 +114,10 @@ export interface SchemaField {
     start?: number;
     end?: number;
   };
+  /** empty = host GetProperties; "driver" = driver-scoped only */
+  scope?: string;
+  /** e.g. "virtual_network_nonzero" */
+  enabled_when?: string;
 }
 
 export interface ChannelSettingsSchema {
@@ -251,9 +255,13 @@ export function fetchNetworkAdapters() {
   return scadaClient.get<ScadaNetworkAdapter[]>('/api/v1/network-adapters');
 }
 
-export function fetchChannelSettingsSchema() {
+export function fetchChannelSettingsSchema(driver?: string) {
+  const q =
+    driver && driver.trim()
+      ? `?driver=${encodeURIComponent(driver.trim())}`
+      : '';
   return scadaClient.get<ChannelSettingsSchema>(
-    '/api/v1/channel-settings/schema',
+    `/api/v1/channel-settings/schema${q}`,
   );
 }
 
@@ -426,6 +434,8 @@ export function fetchDriverChannelSettingsSchema(driver: string) {
     driver: string;
     schema_name?: string;
     fields?: Record<string, SchemaField>;
+    common_fields?: Record<string, SchemaField>;
+    project_fields?: Record<string, SchemaField>;
   }>(`/api/v1/drivers/${encodeURIComponent(driver)}/channel-settings/schema`);
 }
 

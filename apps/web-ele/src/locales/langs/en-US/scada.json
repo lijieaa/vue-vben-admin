@@ -195,6 +195,7 @@
       "hostRequired": "Host is required",
       "portInvalid": "Invalid port",
       "dutyInvalid": "Duty cycle must be 1..10",
+      "delayInvalid": "Inter-device delay must be 0..60000 ms",
       "txnInvalid": "Transactions per cycle must be 1..99",
       "metaFailed": "Failed to load channel metadata",
       "createFailed": "Create failed",
