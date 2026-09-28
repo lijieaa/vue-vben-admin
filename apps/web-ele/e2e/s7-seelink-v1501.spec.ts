@@ -1,4 +1,5 @@
 import path from 'node:path';
+import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { expect, test } from '@playwright/test';
@@ -16,8 +17,10 @@ import {
   selectDeviceInTree,
 } from './helpers/workspace';
 
-const CHANNEL = `S7SeeLink_${Date.now().toString(36)}`;
-const DEVICE = 'V1501';
+const CHANNEL =
+  process.env.E2E_SEELINK_CHANNEL || `S7SeeLink_${Date.now().toString(36)}`;
+const DEVICE = process.env.E2E_SEELINK_DEVICE || 'V1501';
+const KEEP = process.env.E2E_KEEP === '1' || process.env.E2E_KEEP === 'true';
 const FIXTURE = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   'fixtures',
@@ -29,12 +32,16 @@ type Sample = {
   name?: string;
   Address?: string;
   address?: string;
+  Group?: string;
+  group?: string;
 };
 
 test.describe.configure({ mode: 'serial' });
 
 test.afterAll(async () => {
-  await deleteDevice(CHANNEL, DEVICE);
+  if (!KEEP) {
+    await deleteDevice(CHANNEL, DEVICE);
+  }
 });
 
 test('SeeLink V1501 template imports full tag set via API', async () => {
@@ -51,20 +58,14 @@ test('SeeLink V1501 template imports full tag set via API', async () => {
   const spot = (samples[0] || {}) as Sample;
   const tagName = spot.Name || spot.name || 'bAlarmIn';
   const wantAddr = spot.Address || spot.address || 'DB1,DBX0.0';
+  const group = spot.Group || spot.group || '';
   const tag = await findTag(CHANNEL, DEVICE, tagName);
   expect(tag, `missing sample tag ${tagName}`).toBeTruthy();
   expect(String(tag?.address || '')).toBe(wantAddr);
 
-  try {
-    const live = await refreshTag(CHANNEL, DEVICE, tagName);
-    expect(live.path).toContain(tagName);
-  } catch (error) {
-    // Soft PLC may be offline; import + address mapping still validated above.
-    test.info().annotations.push({
-      type: 'note',
-      description: `live refresh skipped: ${error}`,
-    });
-  }
+  const live = await refreshTag(CHANNEL, DEVICE, tagName, group || undefined);
+  expect(live.path).toContain(tagName);
+  expect(String(live.quality || '')).toMatch(/good/i);
 });
 
 test('SeeLink V1501 device appears in workspace tree', async ({ page }) => {

@@ -142,12 +142,25 @@ export async function deleteDeviceTag(
   }
 }
 
-export function tagPath(channel: string, device: string, tag: string) {
+export function tagPath(
+  channel: string,
+  device: string,
+  tag: string,
+  group?: string,
+) {
+  if (group) {
+    return `${channel}.${device}.${group}.${tag}`;
+  }
   return `${channel}.${device}.${tag}`;
 }
 
-export async function getLiveTag(channel: string, device: string, tag: string) {
-  const path = tagPath(channel, device, tag);
+export async function getLiveTag(
+  channel: string,
+  device: string,
+  tag: string,
+  group?: string,
+) {
+  const path = tagPath(channel, device, tag, group);
   const segments = path
     .split('.')
     .map((s) => encodeURIComponent(s))
@@ -158,8 +171,13 @@ export async function getLiveTag(channel: string, device: string, tag: string) {
   );
 }
 
-export async function refreshTag(channel: string, device: string, tag: string) {
-  const path = tagPath(channel, device, tag);
+export async function refreshTag(
+  channel: string,
+  device: string,
+  tag: string,
+  group?: string,
+) {
+  const path = tagPath(channel, device, tag, group);
   return jsonFetch<{ path: string; value?: unknown; quality?: unknown }>(
     'POST',
     '/api/v1/tags/refresh',
