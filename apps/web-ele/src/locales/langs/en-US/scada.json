@@ -187,7 +187,8 @@
       "summaryHint": "Review the configuration, then finish to create the channel.",
       "dutyHint": "Writes performed for every one read when both are pending.",
       "diagnosticsHint": "When on, the channel diagnostics flag is carried on device state.",
-      "mediumHint": "Host/port are this product's channel medium fields; network adapter maps to Ethernet Communications."
+      "mediumHint": "Host/port are this product's channel medium fields; network adapter maps to Ethernet Communications.",
+      "unsolicitedGlobal": "Unsolicited port/protocol are stored on the channel but apply as driver-wide listen settings."
     },
     "errors": {
       "nameRequired": "Channel name is required",

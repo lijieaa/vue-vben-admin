@@ -149,6 +149,18 @@ function enumOptions(fieldKey: string): Array<{ value: any; label: string }> {
   }));
 }
 
+function fieldBound(
+  fieldKey: string,
+  fallbackMin?: number,
+  fallbackMax?: number,
+) {
+  const field = schemaFields.value[fieldKey];
+  return {
+    min: field?.min ?? fallbackMin,
+    max: field?.max ?? fallbackMax,
+  };
+}
+
 function applyDefaults(fields: Record<string, SchemaField>) {
   const set = (key: string, target: keyof typeof form) => {
     const f = fields[key];
@@ -469,7 +481,8 @@ onMounted(() => {
             <ElFormItem :label="$t('scada.device.fields.scanFloor')">
               <ElInputNumber
                 v-model="form.scanFloorMs"
-                :min="0"
+                :min="fieldBound('scan_floor_ms', 0).min"
+                :max="fieldBound('scan_floor_ms').max"
                 class="w-full!"
                 controls-position="right"
               />
@@ -483,7 +496,8 @@ onMounted(() => {
             <ElFormItem :label="$t('scada.device.fields.connectTimeout')">
               <ElInputNumber
                 v-model="form.connectTimeoutMs"
-                :min="0"
+                :min="fieldBound('connect_timeout_ms', 0).min"
+                :max="fieldBound('connect_timeout_ms').max"
                 class="w-full!"
                 controls-position="right"
               />
@@ -508,8 +522,8 @@ onMounted(() => {
             <ElFormItem :label="$t('scada.device.fields.failAfter')">
               <ElInputNumber
                 v-model="form.failAfter"
-                :min="1"
-                :max="30"
+                :min="fieldBound('fail_after', 1).min"
+                :max="fieldBound('fail_after', undefined, 30).max"
                 class="w-full!"
                 controls-position="right"
               />
@@ -517,7 +531,8 @@ onMounted(() => {
             <ElFormItem :label="$t('scada.device.fields.interRequestDelay')">
               <ElInputNumber
                 v-model="form.interRequestDelayMs"
-                :min="0"
+                :min="fieldBound('inter_request_delay_ms', 0).min"
+                :max="fieldBound('inter_request_delay_ms').max"
                 class="w-full!"
                 controls-position="right"
               />
@@ -531,8 +546,10 @@ onMounted(() => {
             <ElFormItem :label="$t('scada.device.fields.demoteAfter')">
               <ElInputNumber
                 v-model="form.demoteAfter"
-                :min="1"
-                :max="30"
+                :min="fieldBound('auto_demotion.demote_after', 1).min"
+                :max="
+                  fieldBound('auto_demotion.demote_after', undefined, 30).max
+                "
                 class="w-full!"
                 controls-position="right"
               />
@@ -540,8 +557,11 @@ onMounted(() => {
             <ElFormItem :label="$t('scada.device.fields.demoteFor')">
               <ElInputNumber
                 v-model="form.demoteForMs"
-                :min="100"
-                :max="3600000"
+                :min="fieldBound('auto_demotion.demote_for_ms', 100).min"
+                :max="
+                  fieldBound('auto_demotion.demote_for_ms', undefined, 3600000)
+                    .max
+                "
                 class="w-full!"
                 controls-position="right"
               />

@@ -86,6 +86,7 @@ const networkAdapters = ref<ScadaNetworkAdapter[]>([]);
 const writeOptValues = ref<Array<boolean | number | string>>([]);
 const floatValues = ref<Array<boolean | number | string>>([]);
 const virtualNetworkValues = ref<Array<boolean | number | string>>([]);
+const driverFields = ref<Record<string, SchemaField>>({});
 /** Caps-filtered host channel fields for the current driver. */
 const hostFields = ref<Record<string, SchemaField>>({});
 
@@ -141,8 +142,20 @@ const transactionsPerCycleEnabled = computed(() => {
   }
   return true;
 });
+const socketsSchemaEnabled = computed(() => {
+  const field =
+    driverFields.value.use_multiple_sockets ??
+    driverFields.value.max_sockets_per_device;
+  if (field?.enabled_when === 'virtual_network_zero') {
+    return !virtualNetworkEnabled.value;
+  }
+  return !virtualNetworkEnabled.value;
+});
 const maxSocketsDisabled = computed(
-  () => !form.useMultipleSockets || virtualNetworkEnabled.value,
+  () => !form.useMultipleSockets || !socketsSchemaEnabled.value,
+);
+const maxSocketsPerDeviceMax = computed(
+  () => driverFields.value.max_sockets_per_device?.max ?? 10,
 );
 
 function optionLabel(value: boolean | number | string): string {
@@ -315,10 +328,11 @@ function adapterLabel(a: ScadaNetworkAdapter): string {
 }
 
 async function loadDriverSchema(driver: string) {
-  if (isEdit.value) return;
   try {
     const doc = await fetchDriverChannelSettingsSchema(driver);
     const fields = doc.fields ?? {};
+    driverFields.value = fields;
+    if (isEdit.value) return;
     applyFieldDefault(fields.use_multiple_sockets, 'useMultipleSockets');
     applyFieldDefault(fields.max_sockets_per_device, 'maxSocketsPerDevice');
     applyFieldDefault(fields.global_unsolicited_port, 'globalUnsolicitedPort');
@@ -390,9 +404,7 @@ async function loadMeta() {
     }
 
     await applyHostSchema(form.driver, !isEdit.value);
-    if (!isEdit.value) {
-      await loadDriverSchema(form.driver);
-    }
+    await loadDriverSchema(form.driver);
     metaReady.value = true;
     if (isEdit.value) applyInitial(props.initial);
   } catch (error) {
@@ -835,7 +847,7 @@ defineExpose({ payload, onSubmit, onReset, loadMeta });
               <ElSelect
                 v-model="form.useMultipleSockets"
                 class="w-full"
-                :disabled="virtualNetworkEnabled"
+                :disabled="!socketsSchemaEnabled"
               >
                 <ElOption
                   v-for="o in socketUtilOptions"
@@ -849,7 +861,7 @@ defineExpose({ payload, onSubmit, onReset, loadMeta });
               <ElInputNumber
                 v-model="form.maxSocketsPerDevice"
                 :min="1"
-                :max="10"
+                :max="maxSocketsPerDeviceMax"
                 :disabled="maxSocketsDisabled"
                 class="w-full!"
                 controls-position="right"
@@ -858,6 +870,9 @@ defineExpose({ payload, onSubmit, onReset, loadMeta });
             <div class="mb-2 mt-3 text-xs font-medium">
               {{ $t('scada.channel.sections.unsolicited') }}
             </div>
+            <p class="text-muted-foreground mb-2 text-xs">
+              {{ $t('scada.channel.hints.unsolicitedGlobal') }}
+            </p>
             <ElFormItem :label="$t('scada.channel.fields.unsolicitedPort')">
               <ElInputNumber
                 v-model="form.globalUnsolicitedPort"
@@ -919,6 +934,19 @@ defineExpose({ payload, onSubmit, onReset, loadMeta });
             :label="$t('scada.channel.fields.socketUtilization')"
           >
             {{ optionLabel(form.useMultipleSockets) }}
+          </ElDescriptionsItem>
+          <ElDescriptionsItem
+            v-if="isModbusDriver"
+            :label="$t('scada.channel.fields.maxSockets')"
+          >
+            {{ form.maxSocketsPerDevice }}
+          </ElDescriptionsItem>
+          <ElDescriptionsItem
+            v-if="isModbusDriver"
+            :label="$t('scada.channel.fields.unsolicitedPort')"
+          >
+            {{ form.globalUnsolicitedPort }} /
+            {{ form.globalUnsolicitedProtocol }}
           </ElDescriptionsItem>
         </ElDescriptions>
       </div>
