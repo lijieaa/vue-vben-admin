@@ -41,7 +41,7 @@
     "channelList": "详情",
     "empty": "暂无通道。点击「新建通道」调用 POST /api/v1/channels。",
     "selectChannel": "在左侧选择通道或设备查看详情。",
-    "connectHint": "（确认 scada-engine 已启动，且 Vite 代理 /scada-api → :8080）",
+    "connectHint": "（确认 scada-engine 已启动，且 Vite 代理 /scada-api → :8888）",
     "filter": "筛选...",
     "devices": "设备",
     "stopped": "已停止",
@@ -403,7 +403,18 @@
     "hints": {
       "group": "可选，如 Area.Line",
       "scanRate": "0 = 继承设备",
-      "address": "直接输入地址，例如 40002。点选格式时只填入该格式的起始地址"
+      "address": "直接输入地址，或点「提示」从格式列表选择"
+    },
+    "hintDialog": {
+      "title": "提示",
+      "open": "提示",
+      "ok": "确定",
+      "cancel": "取消",
+      "help": "帮助(H)",
+      "helpTitle": "地址帮助",
+      "helpFallback": "从列表选择地址格式。确定后填入该格式的起始地址，并设置对应数据类型。",
+      "filter": "筛选地址格式",
+      "empty": "无匹配项"
     },
     "dataTypes": {
       "Default": "默认",

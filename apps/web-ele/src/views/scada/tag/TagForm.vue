@@ -6,7 +6,6 @@ import { computed, reactive, ref, watch } from 'vue';
 import { $t } from '@vben/locales';
 
 import {
-  ElAutocomplete,
   ElButton,
   ElForm,
   ElFormItem,
@@ -26,6 +25,7 @@ import {
 } from '#/api/scada';
 
 import PropertySheet from '../components/PropertySheet.vue';
+import AddressHintDialog from './AddressHintDialog.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -151,14 +151,18 @@ const dataTypeOptions = computed(() => {
 });
 
 const addressHints = ref<ScadaAddressHint[]>([]);
+const addressNotes = ref('');
+const hintDialogOpen = ref(false);
 
 async function loadAddressHints() {
   if (!props.driver) {
     addressHints.value = [];
+    addressNotes.value = '';
     return;
   }
   try {
     const help = await fetchDriverAddressHelp(props.driver, props.model);
+    addressNotes.value = help.notes || '';
     if (help.hints?.length) {
       addressHints.value = help.hints;
       return;
@@ -169,35 +173,18 @@ async function loadAddressHints() {
     }));
   } catch {
     addressHints.value = [];
+    addressNotes.value = '';
   }
 }
 
-function filterAddressHints(
-  query: string,
-  done: (items: Array<ScadaAddressHint & { value: string }>) => void,
-) {
-  const q = query.trim().toLowerCase();
-  let matched = addressHints.value.filter((hint) => {
-    if (!q) return true;
-    return (
-      hint.text.toLowerCase().includes(q) ||
-      hint.example.toLowerCase().includes(q)
-    );
-  });
-  // Imported / free-form addresses (e.g. "48212") match no catalog row —
-  // still offer the full dialect list so the picker does not look "missing".
-  if (matched.length === 0) {
-    matched = addressHints.value;
-  }
-  done(matched.map((hint) => ({ ...hint, value: hint.example })));
-}
-
-function onAddressHint(item: Record<string, any>) {
+function onAddressHint(item: Record<string, any> | ScadaAddressHint) {
   const example = typeof item.example === 'string' ? item.example : '';
-  const value = typeof item.value === 'string' ? item.value : '';
+  const value =
+    typeof (item as any).value === 'string' ? (item as any).value : '';
   form.address = example || value;
-  if (typeof item.data_type === 'string' && item.data_type) {
-    form.dataType = canonicalDataType(item.data_type);
+  const dt = typeof item.data_type === 'string' ? item.data_type : '';
+  if (dt) {
+    form.dataType = canonicalDataType(dt);
   }
 }
 
@@ -343,19 +330,19 @@ async function onSubmit() {
 
         <template #data>
           <ElFormItem :label="$t('scada.tag.fields.address')" required>
-            <ElAutocomplete
-              v-model="form.address"
-              class="w-full"
-              :fetch-suggestions="filterAddressHints"
-              :trigger-on-focus="true"
-              :highlight-first-item="false"
-              :placeholder="$t('scada.tag.hints.address')"
-              @select="onAddressHint"
-            >
-              <template #default="{ item }">
-                <span>{{ item.text }}</span>
-              </template>
-            </ElAutocomplete>
+            <div class="flex w-full gap-2">
+              <ElInput
+                v-model="form.address"
+                class="min-w-0 flex-1"
+                :placeholder="$t('scada.tag.hints.address')"
+              />
+              <ElButton
+                :disabled="addressHints.length === 0"
+                @click="hintDialogOpen = true"
+              >
+                {{ $t('scada.tag.hintDialog.open') }}
+              </ElButton>
+            </div>
           </ElFormItem>
           <ElFormItem :label="$t('scada.tag.fields.dataType')">
             <ElSelect v-model="form.dataType" class="w-full">
@@ -449,6 +436,13 @@ async function onSubmit() {
         </template>
       </PropertySheet>
     </ElForm>
+
+    <AddressHintDialog
+      v-model="hintDialogOpen"
+      :hints="addressHints"
+      :notes="addressNotes"
+      @select="onAddressHint"
+    />
 
     <div
       class="flex justify-end gap-2"

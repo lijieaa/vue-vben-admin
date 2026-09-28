@@ -41,7 +41,7 @@
     "channelList": "Details",
     "empty": "No channels yet. Use New Channel to POST /api/v1/channels.",
     "selectChannel": "Select a channel or device on the left.",
-    "connectHint": "(Ensure scada-engine is up; Vite proxies /scada-api to :8080)",
+    "connectHint": "(Ensure scada-engine is up; Vite proxies /scada-api to :8888)",
     "filter": "Filter...",
     "devices": "devices",
     "stopped": "stopped",
@@ -403,7 +403,18 @@
     "hints": {
       "group": "Optional, e.g. Area.Line",
       "scanRate": "0 = inherit device",
-      "address": "Type an address such as 40002. Picking a format fills only that format's starting address"
+      "address": "Type an address, or open Hints to pick a format"
+    },
+    "hintDialog": {
+      "title": "Hints",
+      "open": "Hints",
+      "ok": "OK",
+      "cancel": "Cancel",
+      "help": "Help(H)",
+      "helpTitle": "Address Help",
+      "helpFallback": "Pick an address format from the list. OK fills the starting address and sets the data type.",
+      "filter": "Filter address formats",
+      "empty": "No matches"
     },
     "dataTypes": {
       "Default": "Default",
