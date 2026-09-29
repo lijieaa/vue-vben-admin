@@ -4,6 +4,7 @@ import type {
   AdvancedTagDef,
   AdvancedTagGroup,
   AdvancedTagsConfig,
+  AdvancedToolbarCaps,
 } from '#/api/scada';
 
 import { computed, onMounted, ref, watch } from 'vue';
@@ -57,6 +58,7 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   mutated: [config: AdvancedTagsConfig];
+  toolbarCaps: [caps: AdvancedToolbarCaps];
 }>();
 
 const KINDS: AdvancedKind[] = [
@@ -171,6 +173,48 @@ const listHint = computed(() => {
     return $t('scada.advancedTags.emptyList');
   }
   return '';
+});
+
+/** Host toolbar OnUpdateCmdUI caps (aligned with CanAddChild / Enable rules). */
+const toolbarCaps = computed<AdvancedToolbarCaps>(() => {
+  // Tag selected (tree or list): no New*; Enable/Disable on that tag.
+  if (selectedRow.value) {
+    const on = selectedRow.value.enabled;
+    return {
+      focus: 'tag',
+      canNewGroup: false,
+      canNewKind: false,
+      canEnable: !on,
+      canDisable: on,
+      canDelete: true,
+    };
+  }
+  // Group selected: New Tag Group + New* kinds; Enable/Disable on group.
+  if (selectedGroupPath.value && activeGroup.value) {
+    const on = activeGroup.value.enabled;
+    return {
+      focus: 'group',
+      canNewGroup: true,
+      canNewKind: true,
+      canEnable: !on,
+      canDisable: on,
+      canDelete: true,
+    };
+  }
+  // Advanced Tags root: New Tag Group only.
+  return {
+    focus: 'root',
+    canNewGroup: true,
+    canNewKind: false,
+    canEnable: false,
+    canDisable: false,
+    canDelete: false,
+  };
+});
+
+watch(toolbarCaps, (caps) => emit('toolbarCaps', caps), {
+  immediate: true,
+  deep: true,
 });
 
 function summaryFor(tag: AdvancedTagDef): string {
@@ -464,6 +508,7 @@ defineExpose({
   reload: load,
   removeSelected,
   openEdit,
+  toolbarCaps,
 });
 
 onMounted(() => {
@@ -493,14 +538,18 @@ onMounted(() => {
       v-if="!embed"
       class="bg-muted/30 mb-2 flex shrink-0 flex-wrap items-center gap-1 border-b px-2 py-1.5"
     >
-      <ElButton size="small" @click="openNewGroup">
+      <ElButton
+        size="small"
+        :disabled="!toolbarCaps.canNewGroup"
+        @click="openNewGroup"
+      >
         {{ $t('scada.advancedTags.newTagGroup') }}
       </ElButton>
       <ElButton
         v-for="k in KINDS"
         :key="`tb-${k}`"
         size="small"
-        :disabled="!selectedGroupPath"
+        :disabled="!toolbarCaps.canNewKind"
         @click="openCreate(k)"
       >
         {{
@@ -511,14 +560,14 @@ onMounted(() => {
       </ElButton>
       <ElButton
         size="small"
-        :disabled="!selectedRow && !activeGroup"
+        :disabled="!toolbarCaps.canEnable"
         @click="setEnabled(true)"
       >
         {{ $t('scada.advancedTags.enable') }}
       </ElButton>
       <ElButton
         size="small"
-        :disabled="!selectedRow && !activeGroup"
+        :disabled="!toolbarCaps.canDisable"
         @click="setEnabled(false)"
       >
         {{ $t('scada.advancedTags.disable') }}
@@ -530,7 +579,7 @@ onMounted(() => {
         size="small"
         type="danger"
         plain
-        :disabled="!selectedRow && !selectedGroupPath"
+        :disabled="!toolbarCaps.canDelete"
         @click="removeSelected"
       >
         {{ $t('scada.advancedTags.delete') }}

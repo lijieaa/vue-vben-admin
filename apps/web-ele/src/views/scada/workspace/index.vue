@@ -3,6 +3,7 @@ import type { ChannelPayload } from '../channel/ChannelForm.vue';
 
 import type {
   AdvancedTagsConfig,
+  AdvancedToolbarCaps,
   AlarmsConfig,
   ScadaChannelInfo,
   ScadaDevice,
@@ -214,6 +215,18 @@ const advancedTagsPanelRef = ref<null | {
   save: () => Promise<void>;
   setEnabled: (enabled: boolean) => void;
 }>(null);
+const advancedToolbarCaps = ref<AdvancedToolbarCaps>({
+  focus: 'root',
+  canNewGroup: true,
+  canNewKind: false,
+  canEnable: false,
+  canDisable: false,
+  canDelete: false,
+});
+
+function onAdvancedToolbarCaps(caps: AdvancedToolbarCaps) {
+  advancedToolbarCaps.value = caps;
+}
 
 const ADVANCED_NEW_KINDS = [
   { kind: 'complex' as const, icon: InspectionPanel },
@@ -1374,12 +1387,12 @@ const projectFileToDelete = computed(
   () => selectedProjectFile.value || projectFile.value,
 );
 
-const canDelete = computed(
-  () =>
-    propsFocus.value === 'device' ||
-    propsFocus.value === 'tag' ||
-    advancedTagsContext.value,
-);
+const canDelete = computed(() => {
+  if (advancedTagsContext.value) {
+    return advancedToolbarCaps.value.canDelete;
+  }
+  return propsFocus.value === 'device' || propsFocus.value === 'tag';
+});
 
 function onToolbarDelete() {
   if (advancedTagsContext.value) {
@@ -2199,6 +2212,7 @@ function onMenuCommand(cmd: string) {
               <ElButton
                 text
                 class="!h-8 !w-8 !p-0"
+                :disabled="!advancedToolbarCaps.canNewGroup"
                 @click="advancedTagsPanelRef?.createGroup()"
               >
                 <FolderPlus class="size-4" />
@@ -2219,6 +2233,7 @@ function onMenuCommand(cmd: string) {
               <ElButton
                 text
                 class="!h-8 !w-8 !p-0"
+                :disabled="!advancedToolbarCaps.canNewKind"
                 @click="advancedTagsPanelRef?.createKind(item.kind)"
               >
                 <component :is="item.icon" class="size-4" />
@@ -2233,6 +2248,7 @@ function onMenuCommand(cmd: string) {
               <ElButton
                 text
                 class="!h-8 !w-8 !p-0"
+                :disabled="!advancedToolbarCaps.canEnable"
                 @click="advancedTagsPanelRef?.setEnabled(true)"
               >
                 <CircleCheckBig class="size-4" />
@@ -2247,6 +2263,7 @@ function onMenuCommand(cmd: string) {
               <ElButton
                 text
                 class="!h-8 !w-8 !p-0"
+                :disabled="!advancedToolbarCaps.canDisable"
                 @click="advancedTagsPanelRef?.setEnabled(false)"
               >
                 <CircleX class="size-4" />
@@ -2493,6 +2510,7 @@ function onMenuCommand(cmd: string) {
                   hide-tree
                   :focus-path="advancedTagsFocusPath"
                   @mutated="onAdvancedTagsMutated"
+                  @toolbar-caps="onAdvancedToolbarCaps"
                 />
               </ResizablePanel>
 

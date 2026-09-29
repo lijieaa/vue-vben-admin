@@ -1,5 +1,14 @@
 import { scadaClient } from './client';
 
+export type AdvancedToolbarCaps = {
+  canDelete: boolean;
+  canDisable: boolean;
+  canEnable: boolean;
+  canNewGroup: boolean;
+  canNewKind: boolean;
+  focus: 'group' | 'root' | 'tag';
+};
+
 export type AdvancedKind =
   | 'average'
   | 'complex'
