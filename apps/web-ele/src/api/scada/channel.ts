@@ -388,6 +388,14 @@ export function fetchLiveTags() {
   return scadaClient.get<ScadaLiveTag[]>('/api/v1/tags');
 }
 
+export function getLiveTag(path: string) {
+  const segments = path
+    .split('.')
+    .map((s) => encodeURIComponent(s))
+    .join('/');
+  return scadaClient.get<ScadaLiveTag>(`/api/v1/tags/${segments}`);
+}
+
 export function addClientRef(path: string) {
   return scadaClient.post<{ path: string; refs: number; active: boolean }>(
     '/api/v1/tags/client-ref',

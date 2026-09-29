@@ -54,11 +54,28 @@ const elementEditIndex = ref(-1);
 const elementDraft = ref<AdvancedElement | null>(null);
 const elementDlgOpen = ref(false);
 
+const KINDS: AdvancedKind[] = [
+  'complex',
+  'average',
+  'maximum',
+  'minimum',
+  'derived',
+  'cumulative',
+  'link',
+];
+
+const isCreate = computed(() => !props.initial);
+
 const title = computed(() => {
-  const k = $t(`scada.advancedTags.kinds.${props.kind}`);
-  return props.initial
-    ? $t('scada.advancedTags.editKind', { kind: k })
-    : $t('scada.advancedTags.newKind', { kind: k });
+  const k = $t(`scada.advancedTags.kinds.${draft.value?.kind || props.kind}`);
+  return isCreate.value
+    ? $t('scada.advancedTags.newKind', { kind: k })
+    : $t('scada.advancedTags.editKind', { kind: k });
+});
+
+const showAggregateDataType = computed(() => {
+  const k = draft.value?.kind;
+  return k === 'average' || k === 'minimum' || k === 'maximum';
 });
 
 const exprSnippets = [
@@ -115,6 +132,17 @@ watch(
     }
   },
 );
+
+function onKindChange(kind: AdvancedKind) {
+  if (!draft.value || props.initial) return;
+  const name = draft.value.name;
+  const enabled = draft.value.enabled;
+  const description = draft.value.description || '';
+  const next = newTagDef(kind, name || `${kind}_tag`);
+  next.enabled = enabled;
+  next.description = description;
+  draft.value = next;
+}
 
 function onTriggerMode(trig: AdvancedTrigger, mode: AdvancedTrigger['mode']) {
   trig.mode = mode;
@@ -227,13 +255,45 @@ function insertByLabel(el: AdvancedElement) {
     destroy-on-close
     class="advanced-tag-dlg"
   >
-    <ElForm v-if="draft" label-width="140px" size="default">
+    <ElForm
+      v-if="draft"
+      class="at-tag-form"
+      label-position="right"
+      label-width="108px"
+      require-asterisk-position="right"
+      size="default"
+    >
+      <div class="at-tag-section-title">
+        {{ $t('scada.advancedTags.sectionIdentification') }}
+      </div>
+      <ElFormItem :label="$t('scada.advancedTags.tagType')">
+        <ElSelect
+          :model-value="draft.kind"
+          class="w-full"
+          :disabled="!isCreate"
+          @update:model-value="(v) => onKindChange(v as AdvancedKind)"
+        >
+          <ElOption
+            v-for="k in KINDS"
+            :key="k"
+            :value="k"
+            :label="$t(`scada.advancedTags.kinds.${k}`)"
+          />
+        </ElSelect>
+      </ElFormItem>
       <ElFormItem :label="$t('scada.advancedTags.tagName')" required>
         <ElInput v-model="draft.name" />
+      </ElFormItem>
+      <ElFormItem :label="$t('scada.advancedTags.description')">
+        <ElInput v-model="draft.description" />
       </ElFormItem>
       <ElFormItem :label="$t('scada.advancedTags.enabled')">
         <ElSwitch v-model="draft.enabled" />
       </ElFormItem>
+
+      <div class="at-tag-section-title">
+        {{ $t('scada.advancedTags.sectionConfiguration') }}
+      </div>
 
       <!-- Link -->
       <template v-if="draft.kind === 'link'">
@@ -327,6 +387,14 @@ function insertByLabel(el: AdvancedElement) {
       >
         <ElFormItem :label="$t('scada.advancedTags.source')">
           <TagPathField v-model="draft.source" />
+        </ElFormItem>
+        <ElFormItem
+          v-if="showAggregateDataType"
+          :label="$t('scada.advancedTags.dataType')"
+        >
+          <ElSelect model-value="Double" disabled class="w-full">
+            <ElOption value="Double" label="Double" />
+          </ElSelect>
         </ElFormItem>
         <ElFormItem :label="$t('scada.advancedTags.runTag')">
           <TagPathField v-model="draft.run_tag" />
@@ -619,3 +687,36 @@ function insertByLabel(el: AdvancedElement) {
     </template>
   </ElDialog>
 </template>
+
+<style scoped>
+.at-tag-form :deep(.el-form-item__label) {
+  justify-content: flex-end;
+  height: auto;
+  line-height: 32px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.at-tag-form :deep(.el-form-item__content) {
+  flex: 1;
+  min-width: 0;
+}
+
+.at-tag-section-title {
+  padding-bottom: 4px;
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.at-tag-section-title + .el-form-item {
+  margin-top: 12px;
+}
+
+.at-tag-form .at-tag-section-title:not(:first-child) {
+  margin-top: 16px;
+}
+</style>

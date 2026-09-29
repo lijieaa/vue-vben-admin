@@ -178,6 +178,149 @@ export async function expectWriteDialogClosed(dialog: Locator) {
   await expect(dialog).toBeHidden({ timeout: 20_000 });
 }
 
+export async function selectAdvancedTagsRoot(page: Page) {
+  const row = page.locator(
+    '.el-tree-node[data-key="advanced-tags"] > .el-tree-node__content',
+  );
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  await row.click();
+  await expect(
+    page.getByRole('button', { name: /新建标签组|New Tag Group/i }),
+  ).toBeEnabled({ timeout: 10_000 });
+}
+
+export async function selectAdvancedGroupInTree(page: Page, path: string) {
+  const row = page.locator(
+    `.el-tree-node[data-key="at-group-${path}"] > .el-tree-node__content`,
+  );
+  await expect(row).toBeVisible({ timeout: 15_000 });
+  await row.click();
+}
+
+export async function openNewAdvancedKind(page: Page, kindLabel: RegExp) {
+  const btn = page
+    .locator('[aria-label="toolbar"]')
+    .getByRole('button', { name: kindLabel });
+  await expect(btn).toBeEnabled({ timeout: 10_000 });
+  await btn.click();
+  const dialog = page.getByRole('dialog').filter({
+    hasText: kindLabel,
+  });
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+  return dialog;
+}
+
+export async function openNewAdvancedGroupDialog(page: Page) {
+  await page
+    .locator('[aria-label="toolbar"]')
+    .getByRole('button', { name: /新建标签组|New Tag Group/i })
+    .click();
+  const dialog = page.getByRole('dialog', {
+    name: /新建标签组|New Tag Group/i,
+  });
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+  return dialog;
+}
+
+export async function fillAdvancedTagName(dialog: Locator, name: string) {
+  const item = dialog
+    .locator('.el-form-item')
+    .filter({ hasText: /标签名称|Tag Name/i })
+    .first();
+  await item.locator('input').fill(name);
+}
+
+export async function fillAdvancedTagPath(
+  dialog: Locator,
+  label: RegExp,
+  path: string,
+) {
+  const item = dialog
+    .locator('.el-form-item')
+    .filter({ hasText: label })
+    .first();
+  await item.locator('input').first().fill(path);
+}
+
+export async function fillAdvancedExpression(
+  dialog: Locator,
+  expression: string,
+) {
+  const item = dialog
+    .locator('.el-form-item')
+    .filter({ hasText: /表达式|Expression/i })
+    .first();
+  await item.locator('textarea').fill(expression);
+}
+
+export async function selectAdvancedFormOption(
+  dialog: Locator,
+  label: RegExp,
+  option: RegExp,
+) {
+  const item = dialog
+    .locator('.el-form-item')
+    .filter({ hasText: label })
+    .first();
+  await item.locator('.el-select').click();
+  await dialog.page().getByRole('option', { name: option }).click();
+}
+
+export async function addComplexElement(
+  dialog: Locator,
+  opts: { name: string; tag: string },
+) {
+  await dialog.getByRole('button', { name: /添加元素|Add Element/i }).click();
+  const elDlg = dialog.page().getByRole('dialog', {
+    name: /复合元素|Complex Element|Element/i,
+  });
+  await expect(elDlg).toBeVisible({ timeout: 10_000 });
+  await elDlg
+    .locator('.el-form-item')
+    .filter({ hasText: /^名称$|Element Name|^Name$/i })
+    .locator('input')
+    .fill(opts.name);
+  await fillAdvancedTagPath(elDlg, /标签路径|Element Tag|Tag Path/i, opts.tag);
+  await elDlg.getByRole('button', { name: /^确定$|^OK$/i }).click();
+  await expect(elDlg).toBeHidden({ timeout: 10_000 });
+}
+
+export async function expectAdvancedTableRow(page: Page, tagName: string) {
+  const row = page
+    .locator('.el-table')
+    .getByRole('row')
+    .filter({ hasText: tagName });
+  await expect(row).toBeVisible({ timeout: 10_000 });
+  return row;
+}
+
+export async function clickAdvancedToolbar(page: Page, name: RegExp) {
+  const btn = page.locator('[aria-label="toolbar"]').getByRole('button', {
+    name,
+  });
+  await expect(btn).toBeEnabled({ timeout: 10_000 });
+  await btn.click();
+}
+
+export async function confirmAdvancedDialog(dialog: Locator) {
+  await dialog.getByRole('button', { name: /^确定$|^OK$/i }).click();
+  await expect(dialog).toBeHidden({ timeout: 15_000 });
+}
+
+export async function saveWorkspaceProject(page: Page) {
+  await page
+    .locator('[aria-label="toolbar"]')
+    .getByRole('button', { name: /^(保存|Save)$/i })
+    .click();
+  await expect(
+    page
+      .getByText(/工程已保存|Project saved|高级标签已保存|Advanced tags saved/i)
+      .first(),
+  ).toBeVisible({
+    timeout: 20_000,
+  });
+}
+
 export async function wizardNext(dialog: Locator) {
   await dialog
     .getByRole('button', { name: /下一步|Next|完成|Create/i })

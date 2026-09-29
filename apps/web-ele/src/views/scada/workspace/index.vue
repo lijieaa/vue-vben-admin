@@ -23,10 +23,7 @@ import {
 } from '@vben/common-ui';
 import {
   Activity,
-  ArrowDown,
-  ArrowUp,
   BookOpenText,
-  CircleCheckBig,
   CircleX,
   ClipboardPaste,
   Copy,
@@ -35,16 +32,12 @@ import {
   FolderMinus,
   FolderOpen,
   FolderPlus,
-  InspectionPanel,
-  Link2,
-  ListOrdered,
   PlugZap,
   RotateCw,
   Save,
   SaveAll,
   Scissors,
   Settings,
-  SquareCode,
   SvgBellIcon,
   Tag,
   Trash2,
@@ -104,6 +97,16 @@ import {
 } from '#/api/scada';
 
 import AdvancedTagsPanel from '../advanced-tags/AdvancedTagsPanel.vue';
+import atIconDisable from '../advanced-tags/icons/disable.png';
+import atIconEnable from '../advanced-tags/icons/enable.png';
+import atIconAverage from '../advanced-tags/icons/new-average.png';
+import atIconComplex from '../advanced-tags/icons/new-complex.png';
+import atIconCumulative from '../advanced-tags/icons/new-cumulative.png';
+import atIconDerived from '../advanced-tags/icons/new-derived.png';
+import atIconGroup from '../advanced-tags/icons/new-group.png';
+import atIconLink from '../advanced-tags/icons/new-link.png';
+import atIconMaximum from '../advanced-tags/icons/new-maximum.png';
+import atIconMinimum from '../advanced-tags/icons/new-minimum.png';
 import AlarmsPanel from '../alarms/AlarmsPanel.vue';
 import ChannelForm from '../channel/ChannelForm.vue';
 import DeviceForm from '../device/DeviceForm.vue';
@@ -141,6 +144,8 @@ interface TreeNode {
   condition?: string;
   /** Advanced tags focus path: group[/subgroup]/tag] */
   atPath?: string;
+  /** Advanced group/tag soft-enable (undefined = N/A). */
+  atEnabled?: boolean;
   children?: TreeNode[];
 }
 
@@ -160,8 +165,24 @@ const TREE_ICONS = {
   advanced_tag: Tag,
 } as const;
 
-function treeIconFor(kind: TreeNode['kind']) {
-  return TREE_ICONS[kind] ?? FolderOpen;
+function treeIconFor(data: TreeNode) {
+  if (data.kind === 'advanced_group') {
+    return data.atEnabled === false ? FolderMinus : FolderOpen;
+  }
+  if (data.kind === 'advanced_tag') {
+    return data.atEnabled === false ? CircleX : Tag;
+  }
+  return TREE_ICONS[data.kind] ?? FolderOpen;
+}
+
+function treeIconClass(data: TreeNode) {
+  if (
+    (data.kind === 'advanced_group' || data.kind === 'advanced_tag') &&
+    data.atEnabled === false
+  ) {
+    return 'text-destructive/80 size-3.5 shrink-0 opacity-70';
+  }
+  return 'text-muted-foreground size-3.5 shrink-0';
 }
 
 interface ListRow {
@@ -213,8 +234,8 @@ const advancedTagsPanelRef = ref<null | {
   createKind: (kind: string) => void;
   openEdit: () => void;
   removeSelected: () => Promise<void> | void;
-  save: () => Promise<void>;
-  setEnabled: (enabled: boolean) => void;
+  save: (opts?: { quiet?: boolean }) => Promise<void>;
+  setEnabled: (enabled: boolean) => Promise<void> | void;
 }>(null);
 const advancedToolbarCaps = ref<AdvancedToolbarCaps>({
   focus: 'root',
@@ -229,14 +250,15 @@ function onAdvancedToolbarCaps(caps: AdvancedToolbarCaps) {
   advancedToolbarCaps.value = caps;
 }
 
+/** Host AT New* icons: bitmap resid == cmd id (0x4e21=20001 ... 0x4e2a=20010). */
 const ADVANCED_NEW_KINDS = [
-  { kind: 'complex' as const, icon: InspectionPanel },
-  { kind: 'average' as const, icon: Activity },
-  { kind: 'maximum' as const, icon: ArrowUp },
-  { kind: 'minimum' as const, icon: ArrowDown },
-  { kind: 'derived' as const, icon: SquareCode },
-  { kind: 'cumulative' as const, icon: ListOrdered },
-  { kind: 'link' as const, icon: Link2 },
+  { kind: 'complex' as const, iconSrc: atIconComplex },
+  { kind: 'average' as const, iconSrc: atIconAverage },
+  { kind: 'maximum' as const, iconSrc: atIconMaximum },
+  { kind: 'minimum' as const, iconSrc: atIconMinimum },
+  { kind: 'derived' as const, iconSrc: atIconDerived },
+  { kind: 'cumulative' as const, iconSrc: atIconCumulative },
+  { kind: 'link' as const, iconSrc: atIconLink },
 ];
 
 /** Left tree selection = parent context for the object list. */
@@ -471,21 +493,26 @@ const treeData = computed<TreeNode[]>(() => {
   const buildAdvancedNodes = (
     groups: AdvancedTagsConfig['groups'] | undefined,
     prefix: string,
+    ancestorsEnabled = true,
   ): TreeNode[] =>
     (groups || []).map((g) => {
       const path = prefix ? `${prefix}/${g.name}` : g.name;
+      // Effective enabled = self AND ancestors (host soft-enable cascade; children keep own flags).
+      const effective = ancestorsEnabled && g.enabled !== false;
       return {
         id: `at-group-${path}`,
         label: g.name || '(group)',
         kind: 'advanced_group' as const,
         atPath: path,
+        atEnabled: effective,
         children: [
-          ...buildAdvancedNodes(g.groups, path),
+          ...buildAdvancedNodes(g.groups, path, effective),
           ...(g.tags || []).map((t) => ({
             id: `at-tag-${path}/${t.name}`,
             label: `${t.name || '(tag)'} [${t.kind || '?'}]`,
             kind: 'advanced_tag' as const,
             atPath: `${path}/${t.name}`,
+            atEnabled: effective && t.enabled !== false,
           })),
         ],
       };
@@ -501,6 +528,7 @@ const treeData = computed<TreeNode[]>(() => {
         label: `${t.name || '(tag)'} [${t.kind || '?'}]`,
         kind: 'advanced_tag' as const,
         atPath: t.name,
+        atEnabled: t.enabled !== false,
       })),
     ],
   };
@@ -1668,12 +1696,16 @@ async function onOpenProjectSubmit() {
   }
 }
 
+async function flushAdvancedTagsBeforeProjectSave() {
+  if (advancedTagsPanelRef.value?.save) {
+    await advancedTagsPanelRef.value.save({ quiet: true });
+  }
+}
+
 async function onSaveProject() {
   fileBusy.value = true;
   try {
-    if (advancedTagsPanelRef.value?.save) {
-      await advancedTagsPanelRef.value.save();
-    }
+    await flushAdvancedTagsBeforeProjectSave();
     const res = await saveProject();
     projectFile.value = res.file;
     ElMessage.success($t('scada.workspace.saveProjectOk'));
@@ -1692,6 +1724,7 @@ async function onSaveProjectAsSubmit() {
   }
   fileBusy.value = true;
   try {
+    await flushAdvancedTagsBeforeProjectSave();
     const res = await saveProjectAs({ name });
     projectFile.value = res.file;
     saveAsVisible.value = false;
@@ -2173,6 +2206,7 @@ function onMenuCommand(cmd: string) {
             <ElButton
               text
               class="!h-8 !w-8 !p-0"
+              :aria-label="$t('scada.workspace.saveProject')"
               :disabled="fileBusy"
               @click="onSaveProject"
             >
@@ -2214,7 +2248,7 @@ function onMenuCommand(cmd: string) {
         <span class="bg-border mx-1 h-5 w-px"></span>
 
         <template v-if="advancedTagsContext">
-          <!-- Host toolbar New* cluster: icons only; captions live in tooltips. -->
+          <!-- Host toolbar New* cluster: icons from plugin BITMAP resid==cmd. -->
           <ElTooltip
             :content="$t('scada.advancedTags.newTagGroup')"
             placement="bottom"
@@ -2223,10 +2257,16 @@ function onMenuCommand(cmd: string) {
               <ElButton
                 text
                 class="!h-8 !w-8 !p-0"
+                :aria-label="$t('scada.advancedTags.newTagGroup')"
                 :disabled="!advancedToolbarCaps.canNewGroup"
                 @click="advancedTagsPanelRef?.createGroup()"
               >
-                <FolderPlus class="size-4" />
+                <img
+                  :src="atIconGroup"
+                  alt=""
+                  class="pointer-events-none size-4 object-contain [image-rendering:pixelated]"
+                  draggable="false"
+                />
               </ElButton>
             </span>
           </ElTooltip>
@@ -2244,10 +2284,20 @@ function onMenuCommand(cmd: string) {
               <ElButton
                 text
                 class="!h-8 !w-8 !p-0"
+                :aria-label="
+                  $t('scada.advancedTags.newKind', {
+                    kind: $t(`scada.advancedTags.kinds.${item.kind}`),
+                  })
+                "
                 :disabled="!advancedToolbarCaps.canNewKind"
                 @click="advancedTagsPanelRef?.createKind(item.kind)"
               >
-                <component :is="item.icon" class="size-4" />
+                <img
+                  :src="item.iconSrc"
+                  alt=""
+                  class="pointer-events-none size-4 object-contain [image-rendering:pixelated]"
+                  draggable="false"
+                />
               </ElButton>
             </span>
           </ElTooltip>
@@ -2259,10 +2309,16 @@ function onMenuCommand(cmd: string) {
               <ElButton
                 text
                 class="!h-8 !w-8 !p-0"
+                :aria-label="$t('scada.advancedTags.enable')"
                 :disabled="!advancedToolbarCaps.canEnable"
                 @click="advancedTagsPanelRef?.setEnabled(true)"
               >
-                <CircleCheckBig class="size-4" />
+                <img
+                  :src="atIconEnable"
+                  alt=""
+                  class="pointer-events-none size-4 object-contain [image-rendering:pixelated]"
+                  draggable="false"
+                />
               </ElButton>
             </span>
           </ElTooltip>
@@ -2274,10 +2330,16 @@ function onMenuCommand(cmd: string) {
               <ElButton
                 text
                 class="!h-8 !w-8 !p-0"
+                :aria-label="$t('scada.advancedTags.disable')"
                 :disabled="!advancedToolbarCaps.canDisable"
                 @click="advancedTagsPanelRef?.setEnabled(false)"
               >
-                <CircleX class="size-4" />
+                <img
+                  :src="atIconDisable"
+                  alt=""
+                  class="pointer-events-none size-4 object-contain [image-rendering:pixelated]"
+                  draggable="false"
+                />
               </ElButton>
             </span>
           </ElTooltip>
@@ -2482,10 +2544,18 @@ function onMenuCommand(cmd: string) {
                       <template #default="{ data }">
                         <span class="inline-flex min-w-0 items-center gap-1.5">
                           <component
-                            :is="treeIconFor(data.kind)"
-                            class="text-muted-foreground size-3.5 shrink-0"
+                            :is="treeIconFor(data)"
+                            :class="treeIconClass(data)"
                           />
-                          <span class="truncate">{{ data.label }}</span>
+                          <span
+                            class="truncate"
+                            :class="{
+                              'text-muted-foreground opacity-70':
+                                data.atEnabled === false,
+                            }"
+                          >
+                            {{ data.label }}
+                          </span>
                         </span>
                       </template>
                     </ElTree>
@@ -2520,6 +2590,7 @@ function onMenuCommand(cmd: string) {
                   embed
                   hide-tree
                   :focus-path="advancedTagsFocusPath"
+                  :mqtt-slug="projectMqttSlug"
                   @mutated="onAdvancedTagsMutated"
                   @toolbar-caps="onAdvancedToolbarCaps"
                 />

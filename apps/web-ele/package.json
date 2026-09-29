@@ -25,7 +25,8 @@
     "test:e2e-ui": "playwright test --ui",
     "test:e2e:s7": "playwright test e2e/s7-device-form.spec.ts",
     "test:e2e:s7-tag": "playwright test e2e/s7-tag-create.spec.ts",
-    "test:e2e:s7-seelink": "playwright test e2e/s7-seelink-v1501.spec.ts"
+    "test:e2e:s7-seelink": "playwright test e2e/s7-seelink-v1501.spec.ts",
+    "test:e2e:advanced-tags": "cross-env E2E_SKIP_S7=1 playwright test e2e/advanced-tags.spec.ts"
   },
   "imports": {
     "#/*": "./src/*"

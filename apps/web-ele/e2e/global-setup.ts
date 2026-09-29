@@ -7,6 +7,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import {
+  killListenersOnPort,
   portOpen,
   runDir,
   spawnLogged,
@@ -43,6 +44,8 @@ async function globalSetup(_config: FullConfig) {
   // Optional in-process fake only when explicitly requested.
   // Never bind 127.0.0.1:102 alongside a real soft PLC on 0.0.0.0:102 —
   // Windows routes 127.0.0.1 connects to the more specific listener first.
+  const skipS7 =
+    process.env.E2E_SKIP_S7 === '1' || process.env.E2E_SKIP_S7 === 'true';
   const wantFake =
     process.env.E2E_S7_FAKE === '1' || process.env.E2E_S7_FAKE === 'true';
   if (wantFake && !(await portOpen('127.0.0.1', 102))) {
@@ -56,19 +59,19 @@ async function globalSetup(_config: FullConfig) {
     );
     s7fakePid = proc.pid;
     await waitPort('127.0.0.1', 102, 120_000);
-  } else if (!(await portOpen('127.0.0.1', 102))) {
+  } else if (!skipS7 && !(await portOpen('127.0.0.1', 102))) {
     throw new Error(
-      'Nothing listening on 127.0.0.1:102. Start your S7 soft PLC, or set E2E_S7_FAKE=1',
+      'Nothing listening on 127.0.0.1:102. Start your S7 soft PLC, or set E2E_S7_FAKE=1 / E2E_SKIP_S7=1',
     );
   }
 
   if (alreadyUp && forceRestart) {
+    killListenersOnPort(8888);
+    await new Promise((r) => setTimeout(r, 800));
     alreadyUp = await portOpen('127.0.0.1', 8888);
   }
 
   if (alreadyUp && !forceRestart) {
-    await waitHTTP(`${apiBase}/api/v1/drivers`);
-  } else if (alreadyUp) {
     await waitHTTP(`${apiBase}/api/v1/drivers`);
   } else {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scada-e2e-'));

@@ -7,7 +7,7 @@ import type {
   AdvancedToolbarCaps,
 } from '#/api/scada';
 
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import { $t } from '@vben/locales';
 
@@ -28,32 +28,29 @@ import {
 
 import {
   clonePlain,
+  fetchLiveTags,
+  fetchProject,
   getAdvancedTags,
   putAdvancedTags,
   scadaErrorMessage,
+  scadaMqttLive,
 } from '#/api/scada';
 
 import AdvancedTagDialog from './AdvancedTagDialog.vue';
-
-type TreeKind = 'group' | 'root';
-
-type TreeNode = {
-  children?: TreeNode[];
-  kind: TreeKind;
-  label: string;
-  path: string;
-};
 
 const props = withDefaults(
   defineProps<{
     embed?: boolean;
     focusPath?: string;
     hideTree?: boolean;
+    /** Project MQTT slug (workspace sets scadaMqttLive; prop keeps AT in sync). */
+    mqttSlug?: string;
   }>(),
   {
     embed: false,
     focusPath: '',
     hideTree: false,
+    mqttSlug: '',
   },
 );
 
@@ -61,6 +58,18 @@ const emit = defineEmits<{
   mutated: [config: AdvancedTagsConfig];
   toolbarCaps: [caps: AdvancedToolbarCaps];
 }>();
+
+const AT_ROOT = '_AdvancedTags';
+
+type TreeKind = 'group' | 'root';
+
+type TreeNode = {
+  children?: TreeNode[];
+  enabled?: boolean;
+  kind: TreeKind;
+  label: string;
+  path: string;
+};
 
 const KINDS: AdvancedKind[] = [
   'complex',
@@ -89,21 +98,162 @@ const groupDlgName = ref('');
 const groupDlgEnabled = ref(true);
 const groupDlgEditPath = ref('');
 
+/** Live VTQ for list paths (MQTT primary, HTTP poll fallback). */
+const liveByPath = ref<Record<string, { value?: unknown; quality?: unknown }>>(
+  {},
+);
+const liveTick = ref(0);
+const liveViaMqtt = ref(false);
+let livePollTimer: null | ReturnType<typeof setInterval> = null;
+let liveSyncSeq = 0;
+
 function markDirty() {
   dirty.value = true;
+}
+
+/** Browse path: _AdvancedTags[.group...].name (slash group path from tree). */
+function atTagPath(groupSlashPath: string, name: string): string {
+  const groups = groupSlashPath.split('/').filter(Boolean);
+  return [AT_ROOT, ...groups, name].filter(Boolean).join('.');
+}
+
+function dataTypeFor(tag: AdvancedTagDef): string {
+  switch (tag.kind) {
+    case 'average':
+    case 'minimum':
+    case 'maximum':
+    case 'derived': {
+      return 'Double';
+    }
+    case 'cumulative': {
+      switch ((tag.max_type || 'byte').toLowerCase()) {
+        case 'word': {
+          return 'Word';
+        }
+        case 'dword': {
+          return 'DWord';
+        }
+        default: {
+          return 'Byte';
+        }
+      }
+    }
+    default: {
+      return 'String';
+    }
+  }
+}
+
+function formatLiveValue(value: unknown): string {
+  if (value === null || value === undefined) return '-';
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : String(value);
+  }
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function liveValueFor(tag: AdvancedTagDef): string {
+  void liveTick.value;
+  const path = atTagPath(selectedGroupPath.value, tag.name);
+  const live = liveByPath.value[path];
+  return live ? formatLiveValue(live.value) : '-';
+}
+
+function stopLiveFeed() {
+  liveSyncSeq++;
+  if (livePollTimer) {
+    clearInterval(livePollTimer);
+    livePollTimer = null;
+  }
+  liveViaMqtt.value = false;
+  void scadaMqttLive.clearSubscription();
+}
+
+function applyLiveSample(path: string, value?: unknown, quality?: unknown) {
+  liveByPath.value[path] = { value, quality };
+  liveTick.value++;
+}
+
+async function pollHttpLive(paths: string[]) {
+  if (paths.length === 0) return;
+  const want = new Set(paths);
+  try {
+    const all = await fetchLiveTags();
+    for (const row of all || []) {
+      if (row?.path && want.has(row.path)) {
+        applyLiveSample(row.path, row.value, row.quality);
+      }
+    }
+  } catch {
+    /* ignore poll errors */
+  }
+}
+
+async function syncLiveForList(tags: AdvancedTagDef[]) {
+  const paths = tags
+    .map((t) => atTagPath(selectedGroupPath.value, t.name))
+    .filter(Boolean);
+  const seq = ++liveSyncSeq;
+  if (livePollTimer) {
+    clearInterval(livePollTimer);
+    livePollTimer = null;
+  }
+  if (paths.length === 0) {
+    await scadaMqttLive.clearSubscription();
+    liveViaMqtt.value = false;
+    return;
+  }
+  if (props.mqttSlug) {
+    scadaMqttLive.setSlug(props.mqttSlug);
+  } else {
+    try {
+      const proj = await fetchProject();
+      const slug = proj.mqtt_slug_effective || proj.mqtt_slug || 'default';
+      scadaMqttLive.setSlug(slug);
+    } catch {
+      /* keep existing slug */
+    }
+  }
+  scadaMqttLive.setHandler((sample) => {
+    applyLiveSample(sample.path, sample.value, sample.quality);
+  });
+  try {
+    liveViaMqtt.value = await scadaMqttLive.subscribeTagPaths(paths);
+  } catch {
+    liveViaMqtt.value = false;
+  }
+  if (seq !== liveSyncSeq) return;
+  await pollHttpLive(paths);
+  if (seq !== liveSyncSeq) return;
+  // Always HTTP-poll as well: mqtt_vtq_by_device used to suppress per-tag
+  // publishes for virtual paths; polling keeps the Value column live.
+  livePollTimer = setInterval(() => {
+    void pollHttpLive(paths);
+  }, 1000);
 }
 
 function buildGroupNodes(
   groups: AdvancedTagGroup[] | undefined,
   prefix: string,
+  ancestorsEnabled = true,
 ): TreeNode[] {
   return (groups || []).map((g) => {
     const path = prefix ? `${prefix}/${g.name}` : g.name;
+    const effective = ancestorsEnabled && g.enabled !== false;
     return {
       kind: 'group' as const,
       label: g.name,
       path,
-      children: buildGroupNodes(g.groups, path),
+      enabled: effective,
+      children: buildGroupNodes(g.groups, path, effective),
     };
   });
 }
@@ -181,15 +331,24 @@ const listHint = computed(() => {
   return '';
 });
 
+watch(
+  [listRows, selectedGroupPath, () => props.mqttSlug],
+  () => {
+    void syncLiveForList(listRows.value);
+  },
+  { immediate: true, deep: true },
+);
+
 /** Host toolbar OnUpdateCmdUI caps (aligned with CanAddChild / Enable rules). */
 const toolbarCaps = computed<AdvancedToolbarCaps>(() => {
-  // Tag selected (tree or list): no New*; Enable/Disable on that tag.
+  const parentAccepts = !selectedGroupPath.value || Boolean(activeGroup.value);
+  // Tag selected: Enable/Disable/Delete on tag; New* still targets parent (root/group).
   if (selectedRow.value) {
     const on = selectedRow.value.enabled;
     return {
       focus: 'tag',
-      canNewGroup: false,
-      canNewKind: false,
+      canNewGroup: parentAccepts,
+      canNewKind: parentAccepts,
       canEnable: !on,
       canDisable: on,
       canDelete: true,
@@ -223,29 +382,6 @@ watch(toolbarCaps, (caps) => emit('toolbarCaps', caps), {
   deep: true,
 });
 
-function summaryFor(tag: AdvancedTagDef): string {
-  switch (tag.kind) {
-    case 'link': {
-      return tag.input || tag.output || '-';
-    }
-    case 'average':
-    case 'minimum':
-    case 'maximum':
-    case 'cumulative': {
-      return tag.source || '-';
-    }
-    case 'derived': {
-      return tag.expression || '-';
-    }
-    case 'complex': {
-      return `${tag.elements?.length || 0} elem`;
-    }
-    default: {
-      return '-';
-    }
-  }
-}
-
 async function load() {
   loading.value = true;
   try {
@@ -265,7 +401,10 @@ async function load() {
   }
 }
 
-async function save() {
+async function save(opts?: { quiet?: boolean }) {
+  if (!dirty.value) {
+    return;
+  }
   saving.value = true;
   try {
     const body = await putAdvancedTags(config.value);
@@ -275,11 +414,14 @@ async function save() {
     };
     dirty.value = false;
     emit('mutated', config.value);
-    ElMessage.success($t('scada.advancedTags.saved'));
+    if (!opts?.quiet) {
+      ElMessage.success($t('scada.advancedTags.saved'));
+    }
   } catch (error) {
     ElMessage.error(
       `${$t('scada.advancedTags.saveFailed')}: ${scadaErrorMessage(error)}`,
     );
+    throw error;
   } finally {
     saving.value = false;
   }
@@ -379,6 +521,7 @@ function onDialogConfirm(tag: AdvancedTagDef) {
   selectedRow.value = tag;
   markDirty();
   emit('mutated', config.value);
+  void persistConfig();
 }
 
 function openNewGroup() {
@@ -439,6 +582,7 @@ function confirmGroupDlg() {
   groupDlgOpen.value = false;
   markDirty();
   emit('mutated', config.value);
+  void persistConfig();
 }
 
 function setEnabled(enabled: boolean) {
@@ -450,6 +594,7 @@ function setEnabled(enabled: boolean) {
       selectedRow.value = tag;
       markDirty();
       emit('mutated', config.value);
+      void persistConfig();
       return;
     }
   }
@@ -458,9 +603,25 @@ function setEnabled(enabled: boolean) {
     g.enabled = enabled;
     markDirty();
     emit('mutated', config.value);
+    void persistConfig();
     return;
   }
   ElMessage.warning($t('scada.advancedTags.selectNodeFirst'));
+}
+
+async function persistConfig() {
+  try {
+    await save();
+  } catch {
+    /* save() already toasts */
+  }
+}
+
+function onTagEnabledChange(row: AdvancedTagDef, v: boolean | number | string) {
+  row.enabled = Boolean(v);
+  markDirty();
+  emit('mutated', config.value);
+  void persistConfig();
 }
 
 async function removeSelected() {
@@ -489,6 +650,7 @@ async function removeSelected() {
     selectedTagId.value = '';
     markDirty();
     emit('mutated', config.value);
+    void persistConfig();
     return;
   }
   if (selectedGroupPath.value) {
@@ -518,6 +680,7 @@ async function removeSelected() {
     selectedGroupPath.value = parentPath;
     markDirty();
     emit('mutated', config.value);
+    void persistConfig();
   }
 }
 
@@ -534,6 +697,11 @@ defineExpose({
 
 onMounted(() => {
   void load();
+});
+
+onUnmounted(() => {
+  stopLiveFeed();
+  scadaMqttLive.setHandler(null);
 });
 </script>
 
@@ -613,7 +781,7 @@ onMounted(() => {
         type="primary"
         :loading="saving"
         :disabled="!dirty"
-        @click="save"
+        @click="() => void save()"
       >
         {{ $t('scada.advancedTags.save') }}
         <span v-if="dirty" class="ml-1">*</span>
@@ -630,7 +798,28 @@ onMounted(() => {
           highlight-current
           :props="{ label: 'label', children: 'children' }"
           @node-click="onTreeSelect"
-        />
+        >
+          <template #default="{ data }">
+            <span
+              class="inline-flex min-w-0 items-center gap-1"
+              :class="{
+                'text-muted-foreground opacity-70': data.enabled === false,
+              }"
+            >
+              <span
+                class="inline-block size-2 shrink-0 rounded-full"
+                :class="
+                  data.kind === 'root'
+                    ? 'bg-primary'
+                    : data.enabled === false
+                      ? 'bg-destructive/70'
+                      : 'bg-emerald-500'
+                "
+              ></span>
+              <span class="truncate">{{ data.label }}</span>
+            </span>
+          </template>
+        </ElTree>
       </aside>
 
       <!-- Middle list (CTagView) -->
@@ -661,15 +850,7 @@ onMounted(() => {
           </ElButton>
         </div>
 
-        <div
-          v-if="!selectedGroupPath"
-          class="text-muted-foreground p-6 text-sm"
-        >
-          {{ listHint }}
-        </div>
-
         <ElTable
-          v-else
           :data="listRows"
           height="100%"
           size="small"
@@ -682,17 +863,40 @@ onMounted(() => {
           <ElTableColumn
             prop="name"
             :label="$t('scada.advancedTags.tagName')"
-            min-width="140"
+            min-width="120"
           />
           <ElTableColumn
             prop="kind"
             :label="$t('scada.advancedTags.kind')"
-            width="120"
+            width="100"
           >
             <template #default="{ row }">
               <ElTag size="small">
                 {{ $t(`scada.advancedTags.kinds.${row.kind}`) }}
               </ElTag>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn
+            :label="$t('scada.advancedTags.address')"
+            min-width="200"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              {{ atTagPath(selectedGroupPath, (row as AdvancedTagDef).name) }}
+            </template>
+          </ElTableColumn>
+          <ElTableColumn :label="$t('scada.advancedTags.dataType')" width="100">
+            <template #default="{ row }">
+              {{ dataTypeFor(row as AdvancedTagDef) }}
+            </template>
+          </ElTableColumn>
+          <ElTableColumn
+            :label="$t('scada.advancedTags.value')"
+            min-width="120"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              {{ liveValueFor(row as AdvancedTagDef) }}
             </template>
           </ElTableColumn>
           <ElTableColumn
@@ -705,22 +909,10 @@ onMounted(() => {
                 :model-value="(row as AdvancedTagDef).enabled"
                 size="small"
                 @change="
-                  (v: string | number | boolean) => {
-                    (row as AdvancedTagDef).enabled = Boolean(v);
-                    markDirty();
-                    emit('mutated', config);
-                  }
+                  (v: string | number | boolean) =>
+                    onTagEnabledChange(row as AdvancedTagDef, v)
                 "
               />
-            </template>
-          </ElTableColumn>
-          <ElTableColumn
-            :label="$t('scada.advancedTags.summary')"
-            min-width="200"
-            show-overflow-tooltip
-          >
-            <template #default="{ row }">
-              {{ summaryFor(row as AdvancedTagDef) }}
             </template>
           </ElTableColumn>
         </ElTable>

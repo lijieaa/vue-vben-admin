@@ -301,3 +301,30 @@ export async function listDeviceTagsPage(
     `/api/v1/channels/${encodeURIComponent(channel)}/devices/${encodeURIComponent(device)}/tags?page_size=${pageSize}`,
   );
 }
+
+export type AdvancedTagsConfigBody = {
+  groups?: Array<{
+    name: string;
+    enabled?: boolean;
+    groups?: AdvancedTagsConfigBody['groups'];
+    tags?: Array<Record<string, unknown>>;
+  }>;
+  tags?: Array<Record<string, unknown>>;
+};
+
+export async function getAdvancedTagsConfig() {
+  return jsonFetch<AdvancedTagsConfigBody>('GET', '/api/v1/advanced-tags');
+}
+
+export async function putAdvancedTagsConfig(body: AdvancedTagsConfigBody) {
+  return jsonFetch<AdvancedTagsConfigBody>(
+    'PUT',
+    '/api/v1/advanced-tags',
+    body,
+  );
+}
+
+/** Reset Advanced Tags tree to empty (root TagList + groups cleared). */
+export async function resetAdvancedTagsConfig() {
+  return putAdvancedTagsConfig({ groups: [], tags: [] });
+}

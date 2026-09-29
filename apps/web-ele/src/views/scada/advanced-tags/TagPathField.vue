@@ -83,89 +83,93 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="flex w-full gap-1">
+  <div class="flex w-full min-w-0 gap-1">
     <ElInput
       v-model="model"
       class="min-w-0 flex-1"
       :placeholder="props.placeholder || $t('scada.advancedTags.tagPathHint')"
       clearable
     />
-    <ElButton @click="openBrowse">
+    <ElButton class="shrink-0" @click="openBrowse">
       {{ $t('scada.advancedTags.browse') }}
     </ElButton>
-  </div>
 
-  <ElDialog
-    v-model="browseOpen"
-    :title="$t('scada.advancedTags.browseTitle')"
-    width="560px"
-    append-to-body
-    destroy-on-close
-  >
-    <div class="mb-2 flex gap-2">
-      <ElInput
-        v-model="filter"
-        clearable
-        :placeholder="$t('scada.advancedTags.filterTags')"
-      />
-      <ElButton :loading="loading" @click="loadTags">
-        {{ $t('scada.advancedTags.refresh') }}
-      </ElButton>
-    </div>
-    <p v-if="loadError" class="mb-2 text-xs text-red-500">{{ loadError }}</p>
-    <ElTable
-      v-loading="loading"
-      :data="filtered"
-      height="320"
-      highlight-current-row
-      size="small"
-      @row-click="onRowClick"
-      @row-dblclick="
-        (row: ScadaLiveTag) => {
-          selectedPath = row.path;
-          confirmBrowse();
-        }
-      "
+    <ElDialog
+      v-model="browseOpen"
+      :title="$t('scada.advancedTags.browseTitle')"
+      width="560px"
+      append-to-body
+      destroy-on-close
     >
-      <ElTableColumn
-        prop="path"
-        :label="$t('scada.advancedTags.tagPath')"
-        min-width="240"
-      />
-      <ElTableColumn
-        prop="value"
-        :label="$t('scada.advancedTags.liveValue')"
-        width="120"
-      >
-        <template #default="{ row }">
-          {{ row.value ?? '-' }}
-        </template>
-      </ElTableColumn>
-    </ElTable>
-    <div class="mt-3">
-      <ElSelect
-        v-model="selectedPath"
-        filterable
-        allow-create
-        default-first-option
-        class="w-full"
-        :placeholder="$t('scada.advancedTags.tagPathHint')"
-      >
-        <ElOption
-          v-for="t in filtered.slice(0, 200)"
-          :key="t.path"
-          :label="t.path"
-          :value="t.path"
+      <div class="mb-2 flex gap-2">
+        <ElInput
+          v-model="filter"
+          clearable
+          :placeholder="$t('scada.advancedTags.filterTags')"
         />
-      </ElSelect>
-    </div>
-    <template #footer>
-      <ElButton @click="browseOpen = false">
-        {{ $t('scada.advancedTags.cancel') }}
-      </ElButton>
-      <ElButton type="primary" :disabled="!selectedPath" @click="confirmBrowse">
-        {{ $t('scada.advancedTags.ok') }}
-      </ElButton>
-    </template>
-  </ElDialog>
+        <ElButton :loading="loading" @click="loadTags">
+          {{ $t('scada.advancedTags.refresh') }}
+        </ElButton>
+      </div>
+      <p v-if="loadError" class="mb-2 text-xs text-red-500">{{ loadError }}</p>
+      <ElTable
+        v-loading="loading"
+        :data="filtered"
+        height="320"
+        highlight-current-row
+        size="small"
+        @row-click="onRowClick"
+        @row-dblclick="
+          (row: ScadaLiveTag) => {
+            selectedPath = row.path;
+            confirmBrowse();
+          }
+        "
+      >
+        <ElTableColumn
+          prop="path"
+          :label="$t('scada.advancedTags.tagPath')"
+          min-width="240"
+        />
+        <ElTableColumn
+          prop="value"
+          :label="$t('scada.advancedTags.liveValue')"
+          width="120"
+        >
+          <template #default="{ row }">
+            {{ row.value ?? '-' }}
+          </template>
+        </ElTableColumn>
+      </ElTable>
+      <div class="mt-3">
+        <ElSelect
+          v-model="selectedPath"
+          filterable
+          allow-create
+          default-first-option
+          class="w-full"
+          :placeholder="$t('scada.advancedTags.tagPathHint')"
+        >
+          <ElOption
+            v-for="t in filtered.slice(0, 200)"
+            :key="t.path"
+            :label="t.path"
+            :value="t.path"
+          />
+        </ElSelect>
+      </div>
+      <template #footer>
+        <ElButton @click="browseOpen = false">
+          {{ $t('scada.advancedTags.cancel') }}
+        </ElButton>
+        <ElButton
+          type="primary"
+          :disabled="!selectedPath"
+          @click="confirmBrowse"
+        >
+          {{ $t('scada.advancedTags.ok') }}
+        </ElButton>
+      </template>
+    </ElDialog>
+  </div>
 </template>

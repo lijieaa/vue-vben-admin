@@ -39,6 +39,7 @@ export interface AdvancedTagDef {
   name: string;
   kind: AdvancedKind;
   enabled: boolean;
+  description?: string;
   input?: string;
   output?: string;
   dead_value?: string;
