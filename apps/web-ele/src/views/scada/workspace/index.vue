@@ -198,6 +198,23 @@ const connected = ref(false);
 const lastError = ref('');
 const alarmsConfig = ref<AlarmsConfig>({ areas: [] });
 const advancedTagsConfig = ref<AdvancedTagsConfig>({ groups: [] });
+const advancedTagsPanelRef = ref<null | {
+  createGroup: () => void;
+  createKind: (kind: string) => void;
+  openEdit: () => void;
+  removeSelected: () => void;
+  setEnabled: (enabled: boolean) => void;
+}>(null);
+
+const ADVANCED_NEW_KINDS = [
+  'link',
+  'average',
+  'minimum',
+  'maximum',
+  'complex',
+  'derived',
+  'cumulative',
+] as const;
 
 /** Left tree selection = parent context for the object list. */
 const treeSelected = ref<null | TreeNode>(null);
@@ -2153,57 +2170,133 @@ function onMenuCommand(cmd: string) {
 
         <span class="bg-border mx-1 h-5 w-px"></span>
 
-        <ElTooltip
-          :content="$t('scada.workspace.newChannel')"
-          placement="bottom"
-        >
-          <span class="inline-flex">
-            <ElButton
-              text
-              class="!h-8 !w-8 !p-0"
-              @click="openCreateChannelDialog"
-            >
-              <Waypoints class="size-4" />
-            </ElButton>
-          </span>
-        </ElTooltip>
-        <ElTooltip
-          :content="$t('scada.workspace.newDevice')"
-          placement="bottom"
-        >
-          <span class="inline-flex">
-            <ElButton
-              text
-              class="!h-8 !w-8 !p-0"
-              :disabled="!canNewDevice"
-              @click="openCreateDeviceDialog"
-            >
-              <Cpu class="size-4" />
-            </ElButton>
-          </span>
-        </ElTooltip>
-        <ElTooltip
-          :content="$t('scada.workspace.tagGroupSoon')"
-          placement="bottom"
-        >
-          <span class="inline-flex">
-            <ElButton text class="!h-8 !w-8 !p-0" disabled>
-              <FolderPlus class="size-4" />
-            </ElButton>
-          </span>
-        </ElTooltip>
-        <ElTooltip :content="$t('scada.workspace.newTag')" placement="bottom">
-          <span class="inline-flex">
-            <ElButton
-              text
-              class="!h-8 !w-8 !p-0"
-              :disabled="!canNewTag"
-              @click="openCreateTagDialog"
-            >
-              <Tag class="size-4" />
-            </ElButton>
-          </span>
-        </ElTooltip>
+        <template v-if="advancedTagsContext">
+          <ElTooltip
+            :content="$t('scada.advancedTags.newTagGroup')"
+            placement="bottom"
+          >
+            <span class="inline-flex">
+              <ElButton
+                text
+                class="!h-8 !w-8 !p-0"
+                @click="advancedTagsPanelRef?.createGroup()"
+              >
+                <FolderPlus class="size-4" />
+              </ElButton>
+            </span>
+          </ElTooltip>
+          <ElDropdown
+            trigger="click"
+            @command="(k: string) => advancedTagsPanelRef?.createKind(k)"
+          >
+            <span class="inline-flex">
+              <ElTooltip
+                :content="$t('scada.advancedTags.newTag')"
+                placement="bottom"
+              >
+                <ElButton text class="!h-8 !w-8 !p-0">
+                  <Tag class="size-4" />
+                </ElButton>
+              </ElTooltip>
+            </span>
+            <template #dropdown>
+              <ElDropdownMenu>
+                <ElDropdownItem
+                  v-for="k in ADVANCED_NEW_KINDS"
+                  :key="k"
+                  :command="k"
+                >
+                  {{
+                    $t('scada.advancedTags.newKind', {
+                      kind: $t(`scada.advancedTags.kinds.${k}`),
+                    })
+                  }}
+                </ElDropdownItem>
+              </ElDropdownMenu>
+            </template>
+          </ElDropdown>
+          <ElTooltip
+            :content="$t('scada.advancedTags.enable')"
+            placement="bottom"
+          >
+            <span class="inline-flex">
+              <ElButton
+                text
+                class="!h-8 px-2"
+                @click="advancedTagsPanelRef?.setEnabled(true)"
+              >
+                {{ $t('scada.advancedTags.enable') }}
+              </ElButton>
+            </span>
+          </ElTooltip>
+          <ElTooltip
+            :content="$t('scada.advancedTags.disable')"
+            placement="bottom"
+          >
+            <span class="inline-flex">
+              <ElButton
+                text
+                class="!h-8 px-2"
+                @click="advancedTagsPanelRef?.setEnabled(false)"
+              >
+                {{ $t('scada.advancedTags.disable') }}
+              </ElButton>
+            </span>
+          </ElTooltip>
+        </template>
+        <template v-else>
+          <ElTooltip
+            :content="$t('scada.workspace.newChannel')"
+            placement="bottom"
+          >
+            <span class="inline-flex">
+              <ElButton
+                text
+                class="!h-8 !w-8 !p-0"
+                @click="openCreateChannelDialog"
+              >
+                <Waypoints class="size-4" />
+              </ElButton>
+            </span>
+          </ElTooltip>
+          <ElTooltip
+            :content="$t('scada.workspace.newDevice')"
+            placement="bottom"
+          >
+            <span class="inline-flex">
+              <ElButton
+                text
+                class="!h-8 !w-8 !p-0"
+                :disabled="!canNewDevice"
+                @click="openCreateDeviceDialog"
+              >
+                <Cpu class="size-4" />
+              </ElButton>
+            </span>
+          </ElTooltip>
+          <ElTooltip
+            :content="$t('scada.workspace.tagGroupSoon')"
+            placement="bottom"
+          >
+            <span class="inline-flex">
+              <ElButton text class="!h-8 !w-8 !p-0" disabled>
+                <FolderPlus class="size-4" />
+              </ElButton>
+            </span>
+          </ElTooltip>
+          <ElTooltip :content="$t('scada.workspace.newTag')" placement="bottom">
+            <span class="inline-flex">
+              <ElButton
+                text
+                class="!h-8 !w-8 !p-0"
+                :disabled="!canNewTag"
+                @click="openCreateTagDialog"
+              >
+                <Tag class="size-4" />
+              </ElButton>
+            </span>
+          </ElTooltip>
+        </template>
 
         <span class="bg-border mx-1 h-5 w-px"></span>
 
@@ -2385,6 +2478,7 @@ function onMenuCommand(cmd: string) {
                 :min-size="40"
               >
                 <AdvancedTagsPanel
+                  ref="advancedTagsPanelRef"
                   embed
                   hide-tree
                   :focus-path="advancedTagsFocusPath"

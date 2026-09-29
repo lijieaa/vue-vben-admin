@@ -1,11 +1,9 @@
 <script lang="ts" setup>
 import type {
-  AdvancedElement,
   AdvancedKind,
   AdvancedTagDef,
   AdvancedTagGroup,
   AdvancedTagsConfig,
-  AdvancedTrigger,
 } from '#/api/scada';
 
 import { computed, onMounted, ref, watch } from 'vue';
@@ -14,14 +12,16 @@ import { $t } from '@vben/locales';
 
 import {
   ElButton,
+  ElDialog,
   ElForm,
   ElFormItem,
   ElInput,
-  ElInputNumber,
   ElMessage,
-  ElOption,
-  ElSelect,
+  ElMessageBox,
   ElSwitch,
+  ElTable,
+  ElTableColumn,
+  ElTag,
   ElTree,
 } from 'element-plus';
 
@@ -29,10 +29,11 @@ import {
   getAdvancedTags,
   putAdvancedTags,
   scadaErrorMessage,
-  validateAdvancedExpression,
 } from '#/api/scada';
 
-type TreeKind = 'group' | 'root' | 'tag';
+import AdvancedTagDialog from './AdvancedTagDialog.vue';
+
+type TreeKind = 'group' | 'root';
 
 type TreeNode = {
   children?: TreeNode[];
@@ -58,14 +59,7 @@ const emit = defineEmits<{
   mutated: [config: AdvancedTagsConfig];
 }>();
 
-const config = ref<AdvancedTagsConfig>({ groups: [] });
-const loading = ref(false);
-const saving = ref(false);
-const validating = ref(false);
-const selectedPath = ref('');
-const selectedKind = ref<TreeKind>('root');
-
-const kinds: AdvancedKind[] = [
+const KINDS: AdvancedKind[] = [
   'link',
   'average',
   'minimum',
@@ -75,16 +69,25 @@ const kinds: AdvancedKind[] = [
   'cumulative',
 ];
 
-function emptyTrigger(
-  mode: AdvancedTrigger['mode'] = 'by_rate',
-): AdvancedTrigger {
-  return {
-    mode,
-    rate: 1,
-    rate_unit: 'seconds',
-    trigger_tag: '',
-    complete_tag: '',
-  };
+const config = ref<AdvancedTagsConfig>({ groups: [] });
+const loading = ref(false);
+const saving = ref(false);
+const dirty = ref(false);
+const selectedGroupPath = ref('');
+const selectedTagId = ref('');
+const selectedRow = ref<AdvancedTagDef | null>(null);
+
+const dlgOpen = ref(false);
+const dlgKind = ref<AdvancedKind>('link');
+const dlgInitial = ref<AdvancedTagDef | null>(null);
+
+const groupDlgOpen = ref(false);
+const groupDlgName = ref('');
+const groupDlgEnabled = ref(true);
+const groupDlgEditPath = ref('');
+
+function markDirty() {
+  dirty.value = true;
 }
 
 function buildGroupNodes(
@@ -93,105 +96,113 @@ function buildGroupNodes(
 ): TreeNode[] {
   return (groups || []).map((g) => {
     const path = prefix ? `${prefix}/${g.name}` : g.name;
-    const children: TreeNode[] = [
-      ...buildGroupNodes(g.groups, path),
-      ...(g.tags || []).map((t) => ({
-        kind: 'tag' as const,
-        label: `${t.name || '(tag)'} [${t.kind || '?'}]`,
-        path: `${path}/${t.name}`,
-      })),
-    ];
     return {
       kind: 'group' as const,
-      label: g.name || '(group)',
+      label: g.name,
       path,
-      children,
+      children: buildGroupNodes(g.groups, path),
     };
   });
 }
 
-const treeData = computed(() => buildGroupNodes(config.value.groups, ''));
+const treeData = computed<TreeNode[]>(() => [
+  {
+    kind: 'root',
+    label: $t('scada.advancedTags.title'),
+    path: '',
+    children: buildGroupNodes(config.value.groups, ''),
+  },
+]);
 
 function findGroup(
   groups: AdvancedTagGroup[] | undefined,
-  parts: string[],
+  path: string,
 ): AdvancedTagGroup | null {
-  if (!groups || parts.length === 0) return null;
-  const g = groups.find((x) => x.name === parts[0]);
-  if (!g) return null;
-  if (parts.length === 1) return g;
-  return findGroup(g.groups, parts.slice(1));
+  if (!path) return null;
+  const parts = path.split('/').filter(Boolean);
+  let list = groups || [];
+  let cur: AdvancedTagGroup | null = null;
+  for (const p of parts) {
+    cur = list.find((g) => g.name === p) || null;
+    if (!cur) return null;
+    list = cur.groups || [];
+  }
+  return cur;
 }
 
-const selectedGroup = computed(() => {
-  if (selectedKind.value !== 'group') return null;
-  const parts = selectedPath.value.split('/').filter(Boolean);
-  return findGroup(config.value.groups, parts);
-});
-
-const selectedTag = computed(() => {
-  if (selectedKind.value !== 'tag') return null;
-  const parts = selectedPath.value.split('/').filter(Boolean);
-  if (parts.length < 2) return null;
-  const g = findGroup(config.value.groups, parts.slice(0, -1));
-  if (!g) return null;
-  const name = parts[parts.length - 1];
-  return (g.tags || []).find((t) => t.name === name) || null;
-});
-
-function applyFocusPath(path: string) {
-  const p = (path || '').trim();
-  if (!p) {
-    selectedPath.value = '';
-    selectedKind.value = 'root';
-    return;
+function ensureGroupPath(path: string): AdvancedTagGroup | null {
+  if (!path) return null;
+  const parts = path.split('/').filter(Boolean);
+  let list = config.value.groups;
+  let cur: AdvancedTagGroup | null = null;
+  for (const p of parts) {
+    cur = list.find((g) => g.name === p) || null;
+    if (!cur) {
+      cur = { name: p, enabled: true, groups: [], tags: [] };
+      list.push(cur);
+    }
+    if (!cur.groups) cur.groups = [];
+    if (!cur.tags) cur.tags = [];
+    list = cur.groups;
   }
-  selectedPath.value = p;
-  const parts = p.split('/').filter(Boolean);
-  const g = findGroup(config.value.groups, parts);
-  if (g) {
-    selectedKind.value = 'group';
-    return;
-  }
-  if (parts.length >= 2) {
-    const parent = findGroup(config.value.groups, parts.slice(0, -1));
-    const tag = parent?.tags?.find((t) => t.name === parts[parts.length - 1]);
-    selectedKind.value = tag ? 'tag' : 'root';
-    return;
-  }
-  selectedKind.value = 'root';
+  return cur;
 }
 
-watch(
-  () => props.focusPath,
-  (path) => {
-    if (!props.hideTree) return;
-    if (path) applyFocusPath(path);
-  },
-  { immediate: true },
+const activeGroup = computed(() =>
+  findGroup(config.value.groups, selectedGroupPath.value),
 );
 
-function onTreeClick(data: TreeNode) {
-  selectedPath.value = data.path;
-  selectedKind.value = data.kind;
+const listRows = computed(() => {
+  const g = activeGroup.value;
+  if (!g) {
+    if (!selectedGroupPath.value) {
+      return [];
+    }
+    return [];
+  }
+  return g.tags || [];
+});
+
+const listHint = computed(() => {
+  if (!selectedGroupPath.value) {
+    return $t('scada.advancedTags.selectGroupOrRoot');
+  }
+  if (listRows.value.length === 0) {
+    return $t('scada.advancedTags.emptyList');
+  }
+  return '';
+});
+
+function summaryFor(tag: AdvancedTagDef): string {
+  switch (tag.kind) {
+    case 'link': {
+      return tag.input || tag.output || '-';
+    }
+    case 'average':
+    case 'minimum':
+    case 'maximum':
+    case 'cumulative': {
+      return tag.source || '-';
+    }
+    case 'derived': {
+      return tag.expression || '-';
+    }
+    case 'complex': {
+      return `${tag.elements?.length || 0} elem`;
+    }
+    default: {
+      return '-';
+    }
+  }
 }
 
-function notifyMutated() {
-  emit('mutated', {
-    groups: structuredClone(config.value.groups || []),
-  });
-}
-
-async function loadConfig() {
+async function load() {
   loading.value = true;
   try {
     const body = await getAdvancedTags();
-    config.value = {
-      groups: body?.groups ? structuredClone(body.groups) : [],
-    };
-    if (props.hideTree && props.focusPath) {
-      applyFocusPath(props.focusPath);
-    }
+    config.value = { groups: body?.groups || [] };
+    dirty.value = false;
+    emit('mutated', config.value);
   } catch (error) {
     ElMessage.error(
       `${$t('scada.advancedTags.loadFailed')}: ${scadaErrorMessage(error)}`,
@@ -201,15 +212,14 @@ async function loadConfig() {
   }
 }
 
-async function saveConfig() {
+async function save() {
   saving.value = true;
   try {
     const body = await putAdvancedTags(config.value);
-    config.value = {
-      groups: body?.groups ? structuredClone(body.groups) : config.value.groups,
-    };
+    config.value = { groups: body?.groups || config.value.groups };
+    dirty.value = false;
+    emit('mutated', config.value);
     ElMessage.success($t('scada.advancedTags.saved'));
-    notifyMutated();
   } catch (error) {
     ElMessage.error(
       `${$t('scada.advancedTags.saveFailed')}: ${scadaErrorMessage(error)}`,
@@ -219,467 +229,471 @@ async function saveConfig() {
   }
 }
 
-function addGroup() {
-  const name = `Group${(config.value.groups?.length || 0) + 1}`;
-  const g: AdvancedTagGroup = { name, enabled: true, tags: [], groups: [] };
-  if (selectedKind.value === 'group' && selectedGroup.value) {
-    selectedGroup.value.groups = [...(selectedGroup.value.groups || []), g];
-    selectedPath.value = `${selectedPath.value}/${name}`;
-  } else {
-    config.value.groups = [...(config.value.groups || []), g];
-    selectedPath.value = name;
-  }
-  selectedKind.value = 'group';
-  notifyMutated();
-}
-
-function addTag() {
-  const g = selectedGroup.value;
-  if (!g && selectedKind.value === 'tag') {
-    ElMessage.warning($t('scada.advancedTags.selectGroup'));
+function applyFocusPath(path: string) {
+  if (!path) {
+    selectedGroupPath.value = '';
+    selectedTagId.value = '';
+    selectedRow.value = null;
     return;
   }
-  let group = g;
-  let groupPath = selectedPath.value;
-  if (selectedKind.value === 'tag') {
-    const parts = selectedPath.value.split('/').filter(Boolean);
-    group = findGroup(config.value.groups, parts.slice(0, -1));
-    groupPath = parts.slice(0, -1).join('/');
-  }
-  if (!group) {
-    ElMessage.warning($t('scada.advancedTags.selectGroup'));
+  const parts = path.split('/').filter(Boolean);
+  const groupPath = parts.join('/');
+  const asGroup = findGroup(config.value.groups, groupPath);
+  if (asGroup) {
+    selectedGroupPath.value = groupPath;
+    selectedTagId.value = '';
+    selectedRow.value = null;
     return;
   }
-  const name = `Tag${(group.tags?.length || 0) + 1}`;
-  const tag: AdvancedTagDef = {
-    id: `at-${Date.now()}`,
-    name,
-    kind: 'link',
-    enabled: true,
-    link_mode: 'on_data_change',
-    dead_value: '0',
-    trigger: emptyTrigger(),
-    send_trigger: emptyTrigger(),
-    elements: [],
-    max_type: 'byte',
-  };
-  group.tags = [...(group.tags || []), tag];
-  selectedPath.value = `${groupPath}/${name}`;
-  selectedKind.value = 'tag';
-  notifyMutated();
-}
-
-function removeSelected() {
-  const parts = selectedPath.value.split('/').filter(Boolean);
-  if (parts.length === 0) return;
-  if (selectedKind.value === 'group') {
-    if (parts.length === 1) {
-      config.value.groups = (config.value.groups || []).filter(
-        (g) => g.name !== parts[0],
-      );
-    } else {
-      const parent = findGroup(config.value.groups, parts.slice(0, -1));
-      if (parent) {
-        parent.groups = (parent.groups || []).filter(
-          (g) => g.name !== parts[parts.length - 1],
-        );
-      }
-    }
-  } else if (selectedKind.value === 'tag') {
-    const parent = findGroup(config.value.groups, parts.slice(0, -1));
-    if (parent) {
-      parent.tags = (parent.tags || []).filter(
-        (t) => t.name !== parts[parts.length - 1],
-      );
-    }
-  }
-  selectedPath.value = '';
-  selectedKind.value = 'root';
-  notifyMutated();
-}
-
-function ensureTrigger(tag: AdvancedTagDef, field: 'send_trigger' | 'trigger') {
-  const existing = tag[field];
-  if (existing) {
-    return existing;
-  }
-  const created = emptyTrigger();
-  tag[field] = created;
-  return created;
-}
-
-function addElement() {
-  const tag = selectedTag.value;
-  if (!tag) return;
-  const el: AdvancedElement = {
-    name: `E${(tag.elements?.length || 0) + 1}`,
-    tag: '',
-  };
-  tag.elements = [...(tag.elements || []), el];
-}
-
-function removeElement(i: number) {
-  const tag = selectedTag.value;
-  if (!tag?.elements) return;
-  tag.elements = tag.elements.filter((_, idx) => idx !== i);
-}
-
-async function checkExpression() {
-  const tag = selectedTag.value;
-  if (!tag?.expression) {
-    ElMessage.warning($t('scada.advancedTags.expressionRequired'));
+  const gp = parts.slice(0, -1).join('/');
+  const grp = findGroup(config.value.groups, gp);
+  if (grp) {
+    const tagName = parts[parts.length - 1] || '';
+    selectedGroupPath.value = gp;
+    const tag = (grp.tags || []).find((t) => t.name === tagName);
+    selectedTagId.value = tag?.id || '';
+    selectedRow.value = tag || null;
     return;
   }
-  validating.value = true;
-  try {
-    const res = await validateAdvancedExpression(tag.expression);
-    if (res.ok) {
-      const note =
-        res.value === undefined
-          ? $t('scada.advancedTags.validateOk')
-          : `${$t('scada.advancedTags.validateOk')} value=${res.value}`;
-      ElMessage.success(note);
-    } else {
-      ElMessage.error(res.error || $t('scada.advancedTags.validateFailed'));
-    }
-  } catch (error) {
-    ElMessage.error(
-      `${$t('scada.advancedTags.validateFailed')}: ${scadaErrorMessage(error)}`,
-    );
-  } finally {
-    validating.value = false;
-  }
+  selectedGroupPath.value = groupPath;
+  selectedTagId.value = '';
+  selectedRow.value = null;
 }
 
-onMounted(() => {
-  void loadConfig();
+watch(
+  () => props.focusPath,
+  (p) => applyFocusPath(p || ''),
+  { immediate: true },
+);
+
+watch(config, () => {
+  if (props.focusPath) applyFocusPath(props.focusPath);
 });
 
-defineExpose({ loadConfig, saveConfig });
+function onTreeSelect(data: TreeNode) {
+  selectedGroupPath.value = data.path;
+  selectedTagId.value = '';
+  selectedRow.value = null;
+}
+
+function onRowClick(row: AdvancedTagDef) {
+  selectedTagId.value = row.id;
+  selectedRow.value = row;
+}
+
+function openCreate(kind: AdvancedKind) {
+  if (!selectedGroupPath.value) {
+    ElMessage.warning($t('scada.advancedTags.selectGroupFirst'));
+    return;
+  }
+  dlgKind.value = kind;
+  dlgInitial.value = null;
+  dlgOpen.value = true;
+}
+
+function openEdit(row?: AdvancedTagDef | null) {
+  const tag = row || selectedRow.value;
+  if (!tag) {
+    ElMessage.warning($t('scada.advancedTags.selectTagFirst'));
+    return;
+  }
+  dlgKind.value = tag.kind;
+  dlgInitial.value = structuredClone(tag);
+  dlgOpen.value = true;
+}
+
+function onDialogConfirm(tag: AdvancedTagDef) {
+  const g = ensureGroupPath(selectedGroupPath.value);
+  if (!g) {
+    ElMessage.warning($t('scada.advancedTags.selectGroupFirst'));
+    return;
+  }
+  if (!g.tags) g.tags = [];
+  const idx = g.tags.findIndex((t) => t.id === tag.id);
+  if (idx === -1) {
+    g.tags.push(tag);
+  } else {
+    g.tags[idx] = tag;
+  }
+  selectedTagId.value = tag.id;
+  selectedRow.value = tag;
+  markDirty();
+  emit('mutated', config.value);
+}
+
+function openNewGroup() {
+  groupDlgEditPath.value = '';
+  groupDlgName.value = 'Group1';
+  groupDlgEnabled.value = true;
+  groupDlgOpen.value = true;
+}
+
+function openEditGroup() {
+  const g = activeGroup.value;
+  if (!g) {
+    ElMessage.warning($t('scada.advancedTags.selectGroupFirst'));
+    return;
+  }
+  groupDlgEditPath.value = selectedGroupPath.value;
+  groupDlgName.value = g.name;
+  groupDlgEnabled.value = g.enabled;
+  groupDlgOpen.value = true;
+}
+
+function confirmGroupDlg() {
+  const name = groupDlgName.value.trim();
+  if (!name) {
+    ElMessage.warning($t('scada.advancedTags.groupNameRequired'));
+    return;
+  }
+  if (groupDlgEditPath.value) {
+    const g = findGroup(config.value.groups, groupDlgEditPath.value);
+    if (g) {
+      g.name = name;
+      g.enabled = groupDlgEnabled.value;
+      // update path
+      const parts = groupDlgEditPath.value.split('/');
+      parts[parts.length - 1] = name;
+      selectedGroupPath.value = parts.join('/');
+    }
+  } else {
+    const parent = selectedGroupPath.value
+      ? ensureGroupPath(selectedGroupPath.value)
+      : null;
+    const target = parent || null;
+    const list = target ? (target.groups ||= []) : config.value.groups;
+    if (list.some((g) => g.name === name)) {
+      ElMessage.warning($t('scada.advancedTags.groupExists'));
+      return;
+    }
+    list.push({
+      name,
+      enabled: groupDlgEnabled.value,
+      groups: [],
+      tags: [],
+    });
+    selectedGroupPath.value = target
+      ? `${selectedGroupPath.value}/${name}`
+      : name;
+  }
+  groupDlgOpen.value = false;
+  markDirty();
+  emit('mutated', config.value);
+}
+
+function setEnabled(enabled: boolean) {
+  if (selectedRow.value && selectedGroupPath.value) {
+    const g = findGroup(config.value.groups, selectedGroupPath.value);
+    const tag = g?.tags?.find((t) => t.id === selectedRow.value?.id);
+    if (tag) {
+      tag.enabled = enabled;
+      selectedRow.value = tag;
+      markDirty();
+      emit('mutated', config.value);
+      return;
+    }
+  }
+  const g = activeGroup.value;
+  if (g) {
+    g.enabled = enabled;
+    markDirty();
+    emit('mutated', config.value);
+    return;
+  }
+  ElMessage.warning($t('scada.advancedTags.selectNodeFirst'));
+}
+
+async function removeSelected() {
+  if (selectedRow.value && selectedGroupPath.value) {
+    try {
+      await ElMessageBox.confirm(
+        $t('scada.advancedTags.confirmDeleteTag', {
+          name: selectedRow.value.name,
+        }),
+        $t('scada.advancedTags.delete'),
+        { type: 'warning' },
+      );
+    } catch {
+      return;
+    }
+    const g = findGroup(config.value.groups, selectedGroupPath.value);
+    if (g?.tags) {
+      g.tags = g.tags.filter((t) => t.id !== selectedRow.value?.id);
+      selectedRow.value = null;
+      selectedTagId.value = '';
+      markDirty();
+      emit('mutated', config.value);
+    }
+    return;
+  }
+  if (selectedGroupPath.value) {
+    try {
+      await ElMessageBox.confirm(
+        $t('scada.advancedTags.confirmDeleteGroup', {
+          name: selectedGroupPath.value,
+        }),
+        $t('scada.advancedTags.delete'),
+        { type: 'warning' },
+      );
+    } catch {
+      return;
+    }
+    const parts = selectedGroupPath.value.split('/');
+    const name = parts.pop();
+    if (!name) return;
+    const parentPath = parts.join('/');
+    if (parentPath) {
+      const parent = findGroup(config.value.groups, parentPath);
+      if (parent?.groups) {
+        parent.groups = parent.groups.filter((g) => g.name !== name);
+      }
+    } else {
+      config.value.groups = config.value.groups.filter((g) => g.name !== name);
+    }
+    selectedGroupPath.value = parentPath;
+    markDirty();
+    emit('mutated', config.value);
+  }
+}
+
+defineExpose({
+  createKind: openCreate,
+  createGroup: openNewGroup,
+  setEnabled,
+  save,
+  reload: load,
+  removeSelected,
+  openEdit,
+});
+
+onMounted(() => {
+  void load();
+});
 </script>
 
 <template>
   <div
-    class="flex h-full min-h-0 flex-col gap-3"
-    :class="embed ? 'p-2' : 'p-4'"
+    class="flex h-full min-h-0 flex-col"
+    :class="embed ? '' : 'p-4'"
+    v-loading="loading"
   >
-    <div class="flex flex-wrap items-center gap-2">
-      <h1 v-if="!embed" class="text-lg font-semibold">
-        {{ $t('scada.advancedTags.title') }}
-      </h1>
-      <span v-if="!embed" class="text-muted-foreground text-sm">{{
-        $t('scada.advancedTags.desc')
-      }}</span>
-      <span v-else class="text-sm font-medium">{{
-        $t('scada.advancedTags.title')
-      }}</span>
-      <div class="ml-auto flex flex-wrap gap-2">
-        <ElButton size="small" @click="addGroup">
-          {{ $t('scada.advancedTags.addGroup') }}
-        </ElButton>
-        <ElButton size="small" @click="addTag">
-          {{ $t('scada.advancedTags.addTag') }}
-        </ElButton>
-        <ElButton size="small" type="danger" @click="removeSelected">
-          {{ $t('scada.advancedTags.delete') }}
-        </ElButton>
-        <ElButton :loading="loading" size="small" @click="loadConfig">
-          {{ $t('scada.advancedTags.refresh') }}
-        </ElButton>
-        <ElButton
-          type="primary"
-          size="small"
-          :loading="saving"
-          @click="saveConfig"
-        >
-          {{ $t('scada.advancedTags.save') }}
-        </ElButton>
+    <div v-if="!embed" class="mb-3 flex items-center justify-between gap-2">
+      <div>
+        <h1 class="text-lg font-semibold">
+          {{ $t('scada.advancedTags.title') }}
+        </h1>
+        <p class="text-muted-foreground text-sm">
+          {{ $t('scada.advancedTags.desc') }}
+        </p>
       </div>
     </div>
 
-    <div class="grid min-h-0 flex-1 grid-cols-12 gap-3">
-      <div
-        v-if="!hideTree"
-        class="border-border col-span-3 flex flex-col gap-2 overflow-auto rounded border p-2"
+    <!-- Context toolbar: New* by kind + Enable/Disable -->
+    <div
+      class="bg-muted/30 flex shrink-0 flex-wrap items-center gap-1 border-b px-2 py-1.5"
+    >
+      <ElButton size="small" @click="openNewGroup">
+        {{ $t('scada.advancedTags.newTagGroup') }}
+      </ElButton>
+      <ElButton
+        v-for="k in KINDS"
+        :key="`tb-${k}`"
+        size="small"
+        :disabled="!selectedGroupPath"
+        @click="openCreate(k)"
       >
+        {{
+          $t('scada.advancedTags.newKind', {
+            kind: $t(`scada.advancedTags.kinds.${k}`),
+          })
+        }}
+      </ElButton>
+
+      <span class="bg-border mx-1 h-5 w-px"></span>
+
+      <ElButton
+        size="small"
+        :disabled="!selectedRow && !activeGroup"
+        @click="setEnabled(true)"
+      >
+        {{ $t('scada.advancedTags.enable') }}
+      </ElButton>
+      <ElButton
+        size="small"
+        :disabled="!selectedRow && !activeGroup"
+        @click="setEnabled(false)"
+      >
+        {{ $t('scada.advancedTags.disable') }}
+      </ElButton>
+      <ElButton size="small" :disabled="!selectedRow" @click="openEdit()">
+        {{ $t('scada.advancedTags.properties') }}
+      </ElButton>
+      <ElButton
+        size="small"
+        type="danger"
+        plain
+        :disabled="!selectedRow && !selectedGroupPath"
+        @click="removeSelected"
+      >
+        {{ $t('scada.advancedTags.delete') }}
+      </ElButton>
+
+      <span class="bg-border mx-1 h-5 w-px"></span>
+
+      <ElButton size="small" :loading="loading" @click="load">
+        {{ $t('scada.advancedTags.refresh') }}
+      </ElButton>
+      <ElButton
+        size="small"
+        type="primary"
+        :loading="saving"
+        :disabled="!dirty"
+        @click="save"
+      >
+        {{ $t('scada.advancedTags.save') }}
+        <span v-if="dirty" class="ml-1">*</span>
+      </ElButton>
+      <ElButton
+        v-if="selectedGroupPath"
+        size="small"
+        text
+        @click="openEditGroup"
+      >
+        {{ $t('scada.advancedTags.groupProps') }}
+      </ElButton>
+    </div>
+
+    <div class="flex min-h-0 flex-1">
+      <!-- Optional tree (standalone page) -->
+      <aside v-if="!hideTree" class="w-56 shrink-0 overflow-auto border-r p-2">
         <ElTree
           :data="treeData"
           node-key="path"
           default-expand-all
           highlight-current
-          :current-node-key="selectedPath || undefined"
           :props="{ label: 'label', children: 'children' }"
-          @node-click="onTreeClick"
+          @node-click="onTreeSelect"
         />
-        <div v-if="!treeData.length" class="text-muted-foreground p-2 text-sm">
-          {{ $t('scada.advancedTags.emptyTree') }}
-        </div>
-      </div>
+      </aside>
 
-      <div
-        class="border-border overflow-auto rounded border p-3"
-        :class="hideTree ? 'col-span-12' : 'col-span-9'"
-      >
-        <template v-if="selectedKind === 'group' && selectedGroup">
-          <ElForm label-width="140px">
-            <ElFormItem :label="$t('scada.advancedTags.groupName')">
-              <ElInput v-model="selectedGroup.name" @change="notifyMutated" />
-            </ElFormItem>
-            <ElFormItem :label="$t('scada.advancedTags.enabled')">
+      <!-- Middle list (CTagView) -->
+      <section class="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div
+          class="text-muted-foreground flex shrink-0 items-center justify-between border-b px-3 py-1.5 text-xs"
+        >
+          <span>
+            {{
+              selectedGroupPath
+                ? $t('scada.advancedTags.listTitle', {
+                    path: selectedGroupPath,
+                  })
+                : $t('scada.advancedTags.title')
+            }}
+          </span>
+          <span v-if="dirty" class="text-amber-600">
+            {{ $t('scada.advancedTags.unsaved') }}
+          </span>
+        </div>
+
+        <div
+          v-if="!selectedGroupPath"
+          class="text-muted-foreground p-6 text-sm"
+        >
+          {{ listHint }}
+        </div>
+
+        <ElTable
+          v-else
+          :data="listRows"
+          height="100%"
+          size="small"
+          highlight-current-row
+          class="min-h-0 flex-1"
+          :empty-text="listHint"
+          @row-click="(row) => onRowClick(row as AdvancedTagDef)"
+          @row-dblclick="(row) => openEdit(row as AdvancedTagDef)"
+        >
+          <ElTableColumn
+            prop="name"
+            :label="$t('scada.advancedTags.tagName')"
+            min-width="140"
+          />
+          <ElTableColumn
+            prop="kind"
+            :label="$t('scada.advancedTags.kind')"
+            width="120"
+          >
+            <template #default="{ row }">
+              <ElTag size="small">
+                {{ $t(`scada.advancedTags.kinds.${row.kind}`) }}
+              </ElTag>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn
+            prop="enabled"
+            :label="$t('scada.advancedTags.enabled')"
+            width="90"
+          >
+            <template #default="{ row }">
               <ElSwitch
-                v-model="selectedGroup.enabled"
-                @change="notifyMutated"
-              />
-            </ElFormItem>
-          </ElForm>
-        </template>
-
-        <template v-else-if="selectedKind === 'tag' && selectedTag">
-          <ElForm label-width="140px">
-            <ElFormItem :label="$t('scada.advancedTags.tagName')">
-              <ElInput v-model="selectedTag.name" @change="notifyMutated" />
-            </ElFormItem>
-            <ElFormItem :label="$t('scada.advancedTags.kind')">
-              <ElSelect v-model="selectedTag.kind" @change="notifyMutated">
-                <ElOption
-                  v-for="k in kinds"
-                  :key="k"
-                  :value="k"
-                  :label="$t(`scada.advancedTags.kinds.${k}`)"
-                />
-              </ElSelect>
-            </ElFormItem>
-            <ElFormItem :label="$t('scada.advancedTags.enabled')">
-              <ElSwitch v-model="selectedTag.enabled" @change="notifyMutated" />
-            </ElFormItem>
-
-            <template v-if="selectedTag.kind === 'link'">
-              <ElFormItem :label="$t('scada.advancedTags.input')">
-                <ElInput v-model="selectedTag.input" />
-              </ElFormItem>
-              <ElFormItem :label="$t('scada.advancedTags.output')">
-                <ElInput v-model="selectedTag.output" />
-              </ElFormItem>
-              <ElFormItem :label="$t('scada.advancedTags.deadValue')">
-                <ElInput v-model="selectedTag.dead_value" />
-              </ElFormItem>
-              <ElFormItem :label="$t('scada.advancedTags.linkMode')">
-                <ElSelect v-model="selectedTag.link_mode">
-                  <ElOption
-                    value="on_data_change"
-                    :label="$t('scada.advancedTags.linkOnChange')"
-                  />
-                  <ElOption
-                    value="on_data_change_ignore_initial"
-                    :label="$t('scada.advancedTags.linkOnChangeIgnore')"
-                  />
-                  <ElOption
-                    value="on_interval"
-                    :label="$t('scada.advancedTags.linkOnInterval')"
-                  />
-                </ElSelect>
-              </ElFormItem>
-              <ElFormItem
-                v-if="selectedTag.link_mode === 'on_interval'"
-                :label="$t('scada.advancedTags.updateRateMs')"
-              >
-                <ElInputNumber
-                  v-model="selectedTag.update_rate_ms"
-                  :min="10"
-                  :step="100"
-                />
-              </ElFormItem>
-            </template>
-
-            <template
-              v-if="
-                selectedTag.kind === 'average' ||
-                selectedTag.kind === 'minimum' ||
-                selectedTag.kind === 'maximum'
-              "
-            >
-              <ElFormItem :label="$t('scada.advancedTags.source')">
-                <ElInput v-model="selectedTag.source" />
-              </ElFormItem>
-              <ElFormItem :label="$t('scada.advancedTags.runTag')">
-                <ElInput v-model="selectedTag.run_tag" />
-              </ElFormItem>
-            </template>
-
-            <template v-if="selectedTag.kind === 'complex'">
-              <ElFormItem :label="$t('scada.advancedTags.elements')">
-                <div class="flex w-full flex-col gap-2">
-                  <div
-                    v-for="(el, i) in selectedTag.elements || []"
-                    :key="i"
-                    class="flex gap-2"
-                  >
-                    <ElInput
-                      v-model="el.name"
-                      :placeholder="$t('scada.advancedTags.elementName')"
-                    />
-                    <ElInput
-                      v-model="el.tag"
-                      :placeholder="$t('scada.advancedTags.elementTag')"
-                    />
-                    <ElButton size="small" @click="removeElement(i)">
-                      {{ $t('scada.advancedTags.delete') }}
-                    </ElButton>
-                  </div>
-                  <ElButton size="small" @click="addElement">
-                    {{ $t('scada.advancedTags.addElement') }}
-                  </ElButton>
-                </div>
-              </ElFormItem>
-              <ElFormItem :label="$t('scada.advancedTags.triggerMode')">
-                <ElSelect
-                  v-model="ensureTrigger(selectedTag, 'send_trigger').mode"
-                >
-                  <ElOption
-                    value="by_rate"
-                    :label="$t('scada.advancedTags.byRate')"
-                  />
-                  <ElOption
-                    value="by_tag"
-                    :label="$t('scada.advancedTags.byTag')"
-                  />
-                </ElSelect>
-              </ElFormItem>
-              <template
-                v-if="
-                  ensureTrigger(selectedTag, 'send_trigger').mode === 'by_rate'
+                :model-value="(row as AdvancedTagDef).enabled"
+                size="small"
+                @change="
+                  (v: string | number | boolean) => {
+                    (row as AdvancedTagDef).enabled = Boolean(v);
+                    markDirty();
+                    emit('mutated', config);
+                  }
                 "
-              >
-                <ElFormItem :label="$t('scada.advancedTags.rate')">
-                  <ElInputNumber
-                    v-model="ensureTrigger(selectedTag, 'send_trigger').rate"
-                    :min="0.001"
-                  />
-                </ElFormItem>
-                <ElFormItem :label="$t('scada.advancedTags.rateUnit')">
-                  <ElSelect
-                    v-model="
-                      ensureTrigger(selectedTag, 'send_trigger').rate_unit
-                    "
-                  >
-                    <ElOption value="milliseconds" label="ms" />
-                    <ElOption value="seconds" label="s" />
-                    <ElOption value="minutes" label="min" />
-                    <ElOption value="hours" label="h" />
-                  </ElSelect>
-                </ElFormItem>
-              </template>
-              <template v-else>
-                <ElFormItem :label="$t('scada.advancedTags.triggerTag')">
-                  <ElInput
-                    v-model="
-                      ensureTrigger(selectedTag, 'send_trigger').trigger_tag
-                    "
-                  />
-                </ElFormItem>
-                <ElFormItem :label="$t('scada.advancedTags.completeTag')">
-                  <ElInput
-                    v-model="
-                      ensureTrigger(selectedTag, 'send_trigger').complete_tag
-                    "
-                  />
-                </ElFormItem>
-              </template>
+              />
             </template>
-
-            <template v-if="selectedTag.kind === 'derived'">
-              <ElFormItem :label="$t('scada.advancedTags.expression')">
-                <ElInput
-                  v-model="selectedTag.expression"
-                  type="textarea"
-                  :rows="3"
-                  placeholder="TAG (Sim.Dev.A) + ABS (-1)"
-                />
-              </ElFormItem>
-              <ElFormItem>
-                <ElButton
-                  size="small"
-                  :loading="validating"
-                  @click="checkExpression"
-                >
-                  {{ $t('scada.advancedTags.checkExpression') }}
-                </ElButton>
-              </ElFormItem>
-              <ElFormItem :label="$t('scada.advancedTags.triggerMode')">
-                <ElSelect v-model="ensureTrigger(selectedTag, 'trigger').mode">
-                  <ElOption
-                    value="by_rate"
-                    :label="$t('scada.advancedTags.byRate')"
-                  />
-                  <ElOption
-                    value="by_tag"
-                    :label="$t('scada.advancedTags.byTag')"
-                  />
-                </ElSelect>
-              </ElFormItem>
-              <template
-                v-if="ensureTrigger(selectedTag, 'trigger').mode === 'by_rate'"
-              >
-                <ElFormItem :label="$t('scada.advancedTags.rate')">
-                  <ElInputNumber
-                    v-model="ensureTrigger(selectedTag, 'trigger').rate"
-                    :min="0.001"
-                  />
-                </ElFormItem>
-                <ElFormItem :label="$t('scada.advancedTags.rateUnit')">
-                  <ElSelect
-                    v-model="ensureTrigger(selectedTag, 'trigger').rate_unit"
-                  >
-                    <ElOption value="milliseconds" label="ms" />
-                    <ElOption value="seconds" label="s" />
-                    <ElOption value="minutes" label="min" />
-                  </ElSelect>
-                </ElFormItem>
-              </template>
-              <template v-else>
-                <ElFormItem :label="$t('scada.advancedTags.triggerTag')">
-                  <ElInput
-                    v-model="ensureTrigger(selectedTag, 'trigger').trigger_tag"
-                  />
-                </ElFormItem>
-                <ElFormItem :label="$t('scada.advancedTags.completeTag')">
-                  <ElInput
-                    v-model="ensureTrigger(selectedTag, 'trigger').complete_tag"
-                  />
-                </ElFormItem>
-              </template>
+          </ElTableColumn>
+          <ElTableColumn
+            :label="$t('scada.advancedTags.summary')"
+            min-width="200"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              {{ summaryFor(row as AdvancedTagDef) }}
             </template>
-
-            <template v-if="selectedTag.kind === 'cumulative'">
-              <ElFormItem :label="$t('scada.advancedTags.source')">
-                <ElInput v-model="selectedTag.source" />
-              </ElFormItem>
-              <ElFormItem :label="$t('scada.advancedTags.maxType')">
-                <ElSelect v-model="selectedTag.max_type">
-                  <ElOption value="byte" label="Byte" />
-                  <ElOption value="word" label="Word" />
-                  <ElOption value="dword" label="DWord" />
-                </ElSelect>
-              </ElFormItem>
-              <ElFormItem :label="$t('scada.advancedTags.maxValue')">
-                <ElInputNumber
-                  v-model="selectedTag.max_value"
-                  :min="0"
-                  :controls="false"
-                />
-              </ElFormItem>
-            </template>
-          </ElForm>
-        </template>
-
-        <div v-else class="text-muted-foreground text-sm">
-          {{
-            hideTree
-              ? $t('scada.advancedTags.selectFromTree')
-              : $t('scada.advancedTags.selectNode')
-          }}
-        </div>
-      </div>
+          </ElTableColumn>
+        </ElTable>
+      </section>
     </div>
+
+    <AdvancedTagDialog
+      v-model:open="dlgOpen"
+      :kind="dlgKind"
+      :initial="dlgInitial"
+      @confirm="onDialogConfirm"
+    />
+
+    <ElDialog
+      v-model="groupDlgOpen"
+      :title="
+        groupDlgEditPath
+          ? $t('scada.advancedTags.groupProps')
+          : $t('scada.advancedTags.newTagGroup')
+      "
+      width="400px"
+      append-to-body
+    >
+      <ElForm label-width="100px">
+        <ElFormItem :label="$t('scada.advancedTags.groupName')">
+          <ElInput v-model="groupDlgName" />
+        </ElFormItem>
+        <ElFormItem :label="$t('scada.advancedTags.enabled')">
+          <ElSwitch v-model="groupDlgEnabled" />
+        </ElFormItem>
+      </ElForm>
+      <template #footer>
+        <ElButton @click="groupDlgOpen = false">
+          {{ $t('scada.advancedTags.cancel') }}
+        </ElButton>
+        <ElButton type="primary" @click="confirmGroupDlg">
+          {{ $t('scada.advancedTags.ok') }}
+        </ElButton>
+      </template>
+    </ElDialog>
   </div>
 </template>

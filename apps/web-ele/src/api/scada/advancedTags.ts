@@ -22,6 +22,7 @@ export interface AdvancedTrigger {
 export interface AdvancedElement {
   name: string;
   tag: string;
+  insert_trigger?: AdvancedTrigger;
 }
 
 export interface AdvancedTagDef {
@@ -35,6 +36,10 @@ export interface AdvancedTagDef {
   link_mode?: string;
   update_rate_ms?: number;
   trigger_type?: string;
+  trigger_tag?: string;
+  comparison?: string;
+  trigger_value?: string;
+  trigger_scan_rate_ms?: number;
   source?: string;
   run_tag?: string;
   elements?: AdvancedElement[];
@@ -78,4 +83,61 @@ export async function validateAdvancedExpression(expression: string) {
     '/api/v1/advanced-tags/validate',
     { expression },
   );
+}
+
+export function emptyTrigger(mode: TriggerMode = 'by_rate'): AdvancedTrigger {
+  return {
+    mode,
+    rate: 1,
+    rate_unit: 'seconds',
+    trigger_tag: '',
+    complete_tag: '',
+  };
+}
+
+export function newTagDef(kind: AdvancedKind, name: string): AdvancedTagDef {
+  const base: AdvancedTagDef = {
+    id: `at-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    name,
+    kind,
+    enabled: true,
+  };
+  switch (kind) {
+    case 'link': {
+      return {
+        ...base,
+        link_mode: 'on_data_change',
+        dead_value: '0',
+        trigger_type: 'always',
+        comparison: '==',
+        trigger_scan_rate_ms: 500,
+        update_rate_ms: 1000,
+      };
+    }
+    case 'average':
+    case 'minimum':
+    case 'maximum': {
+      return { ...base, source: '', run_tag: '' };
+    }
+    case 'complex': {
+      return {
+        ...base,
+        elements: [],
+        send_trigger: emptyTrigger('by_rate'),
+      };
+    }
+    case 'derived': {
+      return {
+        ...base,
+        expression: '',
+        trigger: emptyTrigger('by_rate'),
+      };
+    }
+    case 'cumulative': {
+      return { ...base, source: '', max_type: 'byte' };
+    }
+    default: {
+      return base;
+    }
+  }
 }
