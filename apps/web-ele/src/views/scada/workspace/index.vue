@@ -202,18 +202,19 @@ const advancedTagsPanelRef = ref<null | {
   createGroup: () => void;
   createKind: (kind: string) => void;
   openEdit: () => void;
-  removeSelected: () => void;
+  removeSelected: () => Promise<void> | void;
+  save: () => Promise<void>;
   setEnabled: (enabled: boolean) => void;
 }>(null);
 
 const ADVANCED_NEW_KINDS = [
-  'link',
-  'average',
-  'minimum',
-  'maximum',
   'complex',
+  'average',
+  'maximum',
+  'minimum',
   'derived',
   'cumulative',
+  'link',
 ] as const;
 
 /** Left tree selection = parent context for the object list. */
@@ -1366,10 +1367,17 @@ const projectFileToDelete = computed(
 );
 
 const canDelete = computed(
-  () => propsFocus.value === 'device' || propsFocus.value === 'tag',
+  () =>
+    propsFocus.value === 'device' ||
+    propsFocus.value === 'tag' ||
+    advancedTagsContext.value,
 );
 
 function onToolbarDelete() {
+  if (advancedTagsContext.value) {
+    void advancedTagsPanelRef.value?.removeSelected();
+    return;
+  }
   if (propsFocus.value === 'tag') void onDeleteTag();
   else if (propsFocus.value === 'device') void onDeleteDevice();
 }
@@ -1631,6 +1639,9 @@ async function onOpenProjectSubmit() {
 async function onSaveProject() {
   fileBusy.value = true;
   try {
+    if (advancedTagsPanelRef.value?.save) {
+      await advancedTagsPanelRef.value.save();
+    }
     const res = await saveProject();
     projectFile.value = res.file;
     ElMessage.success($t('scada.workspace.saveProjectOk'));
@@ -2171,58 +2182,53 @@ function onMenuCommand(cmd: string) {
         <span class="bg-border mx-1 h-5 w-px"></span>
 
         <template v-if="advancedTagsContext">
+          <!-- Plugin contributes New* / Enable / Disable into the host toolbar only (no second bar). -->
           <ElTooltip
-            :content="$t('scada.advancedTags.newTagGroup')"
+            :content="$t('scada.advancedTags.newTagGroupTip')"
             placement="bottom"
           >
             <span class="inline-flex">
               <ElButton
                 text
-                class="!h-8 !w-8 !p-0"
+                class="!h-8 px-1.5"
                 @click="advancedTagsPanelRef?.createGroup()"
               >
-                <FolderPlus class="size-4" />
+                {{ $t('scada.advancedTags.newTagGroup') }}
               </ElButton>
             </span>
           </ElTooltip>
-          <ElDropdown
-            trigger="click"
-            @command="(k: string) => advancedTagsPanelRef?.createKind(k)"
-          >
-            <span class="inline-flex">
-              <ElTooltip
-                :content="$t('scada.advancedTags.newTag')"
-                placement="bottom"
-              >
-                <ElButton text class="!h-8 !w-8 !p-0">
-                  <Tag class="size-4" />
-                </ElButton>
-              </ElTooltip>
-            </span>
-            <template #dropdown>
-              <ElDropdownMenu>
-                <ElDropdownItem
-                  v-for="k in ADVANCED_NEW_KINDS"
-                  :key="k"
-                  :command="k"
-                >
-                  {{
-                    $t('scada.advancedTags.newKind', {
-                      kind: $t(`scada.advancedTags.kinds.${k}`),
-                    })
-                  }}
-                </ElDropdownItem>
-              </ElDropdownMenu>
-            </template>
-          </ElDropdown>
           <ElTooltip
-            :content="$t('scada.advancedTags.enable')"
+            v-for="k in ADVANCED_NEW_KINDS"
+            :key="k"
+            :content="
+              $t('scada.advancedTags.newKindTip', {
+                kind: $t(`scada.advancedTags.kinds.${k}`),
+              })
+            "
             placement="bottom"
           >
             <span class="inline-flex">
               <ElButton
                 text
-                class="!h-8 px-2"
+                class="!h-8 px-1.5"
+                @click="advancedTagsPanelRef?.createKind(k)"
+              >
+                {{
+                  $t('scada.advancedTags.newKind', {
+                    kind: $t(`scada.advancedTags.kinds.${k}`),
+                  })
+                }}
+              </ElButton>
+            </span>
+          </ElTooltip>
+          <ElTooltip
+            :content="$t('scada.advancedTags.enableTip')"
+            placement="bottom"
+          >
+            <span class="inline-flex">
+              <ElButton
+                text
+                class="!h-8 px-1.5"
                 @click="advancedTagsPanelRef?.setEnabled(true)"
               >
                 {{ $t('scada.advancedTags.enable') }}
@@ -2230,13 +2236,13 @@ function onMenuCommand(cmd: string) {
             </span>
           </ElTooltip>
           <ElTooltip
-            :content="$t('scada.advancedTags.disable')"
+            :content="$t('scada.advancedTags.disableTip')"
             placement="bottom"
           >
             <span class="inline-flex">
               <ElButton
                 text
-                class="!h-8 px-2"
+                class="!h-8 px-1.5"
                 @click="advancedTagsPanelRef?.setEnabled(false)"
               >
                 {{ $t('scada.advancedTags.disable') }}

@@ -60,13 +60,13 @@ const emit = defineEmits<{
 }>();
 
 const KINDS: AdvancedKind[] = [
-  'link',
-  'average',
-  'minimum',
-  'maximum',
   'complex',
+  'average',
+  'maximum',
+  'minimum',
   'derived',
   'cumulative',
+  'link',
 ];
 
 const config = ref<AdvancedTagsConfig>({ groups: [] });
@@ -488,9 +488,10 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Context toolbar: New* by kind + Enable/Disable -->
+    <!-- Host owns the command toolbar (workspace CConfigToolbar). Panel is CTagView only when embed. -->
     <div
-      class="bg-muted/30 flex shrink-0 flex-wrap items-center gap-1 border-b px-2 py-1.5"
+      v-if="!embed"
+      class="bg-muted/30 mb-2 flex shrink-0 flex-wrap items-center gap-1 border-b px-2 py-1.5"
     >
       <ElButton size="small" @click="openNewGroup">
         {{ $t('scada.advancedTags.newTagGroup') }}
@@ -508,9 +509,6 @@ onMounted(() => {
           })
         }}
       </ElButton>
-
-      <span class="bg-border mx-1 h-5 w-px"></span>
-
       <ElButton
         size="small"
         :disabled="!selectedRow && !activeGroup"
@@ -537,9 +535,6 @@ onMounted(() => {
       >
         {{ $t('scada.advancedTags.delete') }}
       </ElButton>
-
-      <span class="bg-border mx-1 h-5 w-px"></span>
-
       <ElButton size="small" :loading="loading" @click="load">
         {{ $t('scada.advancedTags.refresh') }}
       </ElButton>
@@ -552,14 +547,6 @@ onMounted(() => {
       >
         {{ $t('scada.advancedTags.save') }}
         <span v-if="dirty" class="ml-1">*</span>
-      </ElButton>
-      <ElButton
-        v-if="selectedGroupPath"
-        size="small"
-        text
-        @click="openEditGroup"
-      >
-        {{ $t('scada.advancedTags.groupProps') }}
       </ElButton>
     </div>
 
@@ -593,6 +580,15 @@ onMounted(() => {
           <span v-if="dirty" class="text-amber-600">
             {{ $t('scada.advancedTags.unsaved') }}
           </span>
+          <ElButton
+            v-if="selectedGroupPath && embed"
+            size="small"
+            text
+            class="!h-6"
+            @click="openEditGroup"
+          >
+            {{ $t('scada.advancedTags.groupProps') }}
+          </ElButton>
         </div>
 
         <div
