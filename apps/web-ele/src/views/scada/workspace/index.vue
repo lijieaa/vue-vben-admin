@@ -22,7 +22,11 @@ import {
 } from '@vben/common-ui';
 import {
   Activity,
+  ArrowDown,
+  ArrowUp,
   BookOpenText,
+  CircleCheckBig,
+  CircleX,
   ClipboardPaste,
   Copy,
   Cpu,
@@ -30,12 +34,16 @@ import {
   FolderMinus,
   FolderOpen,
   FolderPlus,
+  InspectionPanel,
+  Link2,
+  ListOrdered,
   PlugZap,
   RotateCw,
   Save,
   SaveAll,
   Scissors,
   Settings,
+  SquareCode,
   SvgBellIcon,
   Tag,
   Trash2,
@@ -208,14 +216,14 @@ const advancedTagsPanelRef = ref<null | {
 }>(null);
 
 const ADVANCED_NEW_KINDS = [
-  'complex',
-  'average',
-  'maximum',
-  'minimum',
-  'derived',
-  'cumulative',
-  'link',
-] as const;
+  { kind: 'complex' as const, icon: InspectionPanel },
+  { kind: 'average' as const, icon: Activity },
+  { kind: 'maximum' as const, icon: ArrowUp },
+  { kind: 'minimum' as const, icon: ArrowDown },
+  { kind: 'derived' as const, icon: SquareCode },
+  { kind: 'cumulative' as const, icon: ListOrdered },
+  { kind: 'link' as const, icon: Link2 },
+];
 
 /** Left tree selection = parent context for the object list. */
 const treeSelected = ref<null | TreeNode>(null);
@@ -2182,27 +2190,27 @@ function onMenuCommand(cmd: string) {
         <span class="bg-border mx-1 h-5 w-px"></span>
 
         <template v-if="advancedTagsContext">
-          <!-- Plugin contributes New* / Enable / Disable into the host toolbar only (no second bar). -->
+          <!-- Host toolbar New* cluster: icons only; captions live in tooltips. -->
           <ElTooltip
-            :content="$t('scada.advancedTags.newTagGroupTip')"
+            :content="$t('scada.advancedTags.newTagGroup')"
             placement="bottom"
           >
             <span class="inline-flex">
               <ElButton
                 text
-                class="!h-8 px-1.5"
+                class="!h-8 !w-8 !p-0"
                 @click="advancedTagsPanelRef?.createGroup()"
               >
-                {{ $t('scada.advancedTags.newTagGroup') }}
+                <FolderPlus class="size-4" />
               </ElButton>
             </span>
           </ElTooltip>
           <ElTooltip
-            v-for="k in ADVANCED_NEW_KINDS"
-            :key="k"
+            v-for="item in ADVANCED_NEW_KINDS"
+            :key="item.kind"
             :content="
-              $t('scada.advancedTags.newKindTip', {
-                kind: $t(`scada.advancedTags.kinds.${k}`),
+              $t('scada.advancedTags.newKind', {
+                kind: $t(`scada.advancedTags.kinds.${item.kind}`),
               })
             "
             placement="bottom"
@@ -2210,42 +2218,38 @@ function onMenuCommand(cmd: string) {
             <span class="inline-flex">
               <ElButton
                 text
-                class="!h-8 px-1.5"
-                @click="advancedTagsPanelRef?.createKind(k)"
+                class="!h-8 !w-8 !p-0"
+                @click="advancedTagsPanelRef?.createKind(item.kind)"
               >
-                {{
-                  $t('scada.advancedTags.newKind', {
-                    kind: $t(`scada.advancedTags.kinds.${k}`),
-                  })
-                }}
+                <component :is="item.icon" class="size-4" />
               </ElButton>
             </span>
           </ElTooltip>
           <ElTooltip
-            :content="$t('scada.advancedTags.enableTip')"
+            :content="$t('scada.advancedTags.enable')"
             placement="bottom"
           >
             <span class="inline-flex">
               <ElButton
                 text
-                class="!h-8 px-1.5"
+                class="!h-8 !w-8 !p-0"
                 @click="advancedTagsPanelRef?.setEnabled(true)"
               >
-                {{ $t('scada.advancedTags.enable') }}
+                <CircleCheckBig class="size-4" />
               </ElButton>
             </span>
           </ElTooltip>
           <ElTooltip
-            :content="$t('scada.advancedTags.disableTip')"
+            :content="$t('scada.advancedTags.disable')"
             placement="bottom"
           >
             <span class="inline-flex">
               <ElButton
                 text
-                class="!h-8 px-1.5"
+                class="!h-8 !w-8 !p-0"
                 @click="advancedTagsPanelRef?.setEnabled(false)"
               >
-                {{ $t('scada.advancedTags.disable') }}
+                <CircleX class="size-4" />
               </ElButton>
             </span>
           </ElTooltip>
