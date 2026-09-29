@@ -2,6 +2,7 @@
 import type { ChannelPayload } from '../channel/ChannelForm.vue';
 
 import type {
+  AdvancedTagsConfig,
   AlarmsConfig,
   ScadaChannelInfo,
   ScadaDevice,
@@ -77,6 +78,7 @@ import {
   fetchChannels,
   fetchDeviceTagsPage,
   fetchProject,
+  getAdvancedTags,
   getAlarms,
   listProjectFiles,
   newProject,
@@ -91,6 +93,7 @@ import {
   scadaMqttLive,
 } from '#/api/scada';
 
+import AdvancedTagsPanel from '../advanced-tags/AdvancedTagsPanel.vue';
 import AlarmsPanel from '../alarms/AlarmsPanel.vue';
 import ChannelForm from '../channel/ChannelForm.vue';
 import DeviceForm from '../device/DeviceForm.vue';
@@ -101,8 +104,11 @@ import EventLogPanel from './EventLogPanel.vue';
 import ProjectPropsPanel from './ProjectPropsPanel.vue';
 import ProjectSettingsDialog from './ProjectSettingsDialog.vue';
 
-/** Tree: workspace → projects → channel|alarms → device|area → source → condition. */
+/** Tree: workspace → projects → channel|alarms|advanced-tags → ... */
 type TreeKind =
+  | 'advanced_group'
+  | 'advanced_tag'
+  | 'advanced_tags'
   | 'alarm_area'
   | 'alarm_condition'
   | 'alarm_source'
@@ -123,6 +129,8 @@ interface TreeNode {
   area?: string;
   source?: string;
   condition?: string;
+  /** Advanced tags focus path: group[/subgroup]/tag] */
+  atPath?: string;
   children?: TreeNode[];
 }
 
@@ -137,6 +145,9 @@ const TREE_ICONS = {
   alarm_area: FolderOpen,
   alarm_source: PlugZap,
   alarm_condition: Tag,
+  advanced_tags: Activity,
+  advanced_group: FolderOpen,
+  advanced_tag: Tag,
 } as const;
 
 function treeIconFor(kind: TreeNode['kind']) {
@@ -186,6 +197,7 @@ const tagsByDevice = ref<Record<string, ScadaTagEntry[]>>({});
 const connected = ref(false);
 const lastError = ref('');
 const alarmsConfig = ref<AlarmsConfig>({ areas: [] });
+const advancedTagsConfig = ref<AdvancedTagsConfig>({ groups: [] });
 
 /** Left tree selection = parent context for the object list. */
 const treeSelected = ref<null | TreeNode>(null);
@@ -416,6 +428,34 @@ const treeData = computed<TreeNode[]>(() => {
       })),
     })),
   };
+  const buildAdvancedNodes = (
+    groups: AdvancedTagsConfig['groups'] | undefined,
+    prefix: string,
+  ): TreeNode[] =>
+    (groups || []).map((g) => {
+      const path = prefix ? `${prefix}/${g.name}` : g.name;
+      return {
+        id: `at-group-${path}`,
+        label: g.name || '(group)',
+        kind: 'advanced_group' as const,
+        atPath: path,
+        children: [
+          ...buildAdvancedNodes(g.groups, path),
+          ...(g.tags || []).map((t) => ({
+            id: `at-tag-${path}/${t.name}`,
+            label: `${t.name || '(tag)'} [${t.kind || '?'}]`,
+            kind: 'advanced_tag' as const,
+            atPath: `${path}/${t.name}`,
+          })),
+        ],
+      };
+    });
+  const advancedTagsRoot: TreeNode = {
+    id: 'advanced-tags',
+    label: $t('scada.workspace.advancedTagsRoot'),
+    kind: 'advanced_tags',
+    children: buildAdvancedNodes(advancedTagsConfig.value.groups, ''),
+  };
   let catalog = projectCatalog.value;
   if (catalog.length === 0 && projectFile.value) {
     catalog = [
@@ -438,7 +478,7 @@ const treeData = computed<TreeNode[]>(() => {
         file: p.name,
         children:
           p.active || p.name === projectFile.value
-            ? [...channelNodes, alarmsRoot]
+            ? [...channelNodes, alarmsRoot, advancedTagsRoot]
             : undefined,
       })),
     },
@@ -454,7 +494,18 @@ function isAlarmsKind(kind?: string) {
   );
 }
 
+function isAdvancedTagsKind(kind?: string) {
+  return (
+    kind === 'advanced_tags' ||
+    kind === 'advanced_group' ||
+    kind === 'advanced_tag'
+  );
+}
+
 const alarmsContext = computed(() => isAlarmsKind(treeSelected.value?.kind));
+const advancedTagsContext = computed(() =>
+  isAdvancedTagsKind(treeSelected.value?.kind),
+);
 
 const alarmsFocusPath = computed(() => {
   const n = treeSelected.value;
@@ -470,6 +521,13 @@ const alarmsFocusPath = computed(() => {
   return '';
 });
 
+const advancedTagsFocusPath = computed(() => {
+  const n = treeSelected.value;
+  if (!n || !isAdvancedTagsKind(n.kind)) return '';
+  if (n.kind === 'advanced_tags') return '';
+  return n.atPath || '';
+});
+
 async function loadAlarmsConfig() {
   try {
     const body = await getAlarms();
@@ -481,12 +539,33 @@ async function loadAlarmsConfig() {
   }
 }
 
+async function loadAdvancedTagsConfig() {
+  try {
+    const body = await getAdvancedTags();
+    advancedTagsConfig.value = {
+      groups: body?.groups ? structuredClone(body.groups) : [],
+    };
+  } catch {
+    advancedTagsConfig.value = { groups: [] };
+  }
+}
+
 function selectAlarmsRoot() {
   if (!projectFile.value) return;
   treeSelected.value = {
     id: 'alarms',
     label: $t('scada.workspace.alarmsRoot'),
     kind: 'alarms',
+  };
+  listSelected.value = null;
+}
+
+function selectAdvancedTagsRoot() {
+  if (!projectFile.value) return;
+  treeSelected.value = {
+    id: 'advanced-tags',
+    label: $t('scada.workspace.advancedTagsRoot'),
+    kind: 'advanced_tags',
   };
   listSelected.value = null;
 }
@@ -1389,6 +1468,12 @@ function onAlarmsMutated(cfg: AlarmsConfig) {
   };
 }
 
+function onAdvancedTagsMutated(cfg: AdvancedTagsConfig) {
+  advancedTagsConfig.value = {
+    groups: structuredClone(cfg?.groups || []),
+  };
+}
+
 async function refresh() {
   loading.value = true;
   lastError.value = '';
@@ -1406,6 +1491,7 @@ async function refresh() {
     channels.value = list ?? [];
     await loadDevicesForChannels(channels.value);
     await loadAlarmsConfig();
+    await loadAdvancedTagsConfig();
     connected.value = true;
     if (!treeSelected.value) {
       const active =
@@ -1777,6 +1863,11 @@ onMounted(async () => {
   await refresh();
   if (route.query.focus === 'alarms') {
     selectAlarmsRoot();
+    const nextQuery = { ...route.query };
+    delete nextQuery.focus;
+    void router.replace({ query: nextQuery });
+  } else if (route.query.focus === 'advanced-tags') {
+    selectAdvancedTagsRoot();
     const nextQuery = { ...route.query };
     delete nextQuery.focus;
     void router.replace({ query: nextQuery });
@@ -2285,6 +2376,19 @@ function onMenuCommand(cmd: string) {
                   hide-tree
                   :focus-path="alarmsFocusPath"
                   @mutated="onAlarmsMutated"
+                />
+              </ResizablePanel>
+
+              <ResizablePanel
+                v-else-if="advancedTagsContext"
+                :default-size="86"
+                :min-size="40"
+              >
+                <AdvancedTagsPanel
+                  embed
+                  hide-tree
+                  :focus-path="advancedTagsFocusPath"
+                  @mutated="onAdvancedTagsMutated"
                 />
               </ResizablePanel>
 

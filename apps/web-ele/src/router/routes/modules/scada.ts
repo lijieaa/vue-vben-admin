@@ -43,6 +43,19 @@ const routes: RouteRecordRaw[] = [
           title: $t('scada.menu.alarms'),
         },
       },
+      {
+        name: 'ScadaAdvancedTags',
+        path: 'advanced-tags',
+        redirect: {
+          name: 'ScadaWorkspace',
+          query: { focus: 'advanced-tags' },
+        },
+        meta: {
+          hideInMenu: true,
+          icon: 'lucide:layers',
+          title: $t('scada.menu.advancedTags'),
+        },
+      },
     ],
   },
 ];
