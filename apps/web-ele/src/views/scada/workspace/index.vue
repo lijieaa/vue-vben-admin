@@ -77,6 +77,7 @@ import {
 
 import {
   batchWriteTags,
+  clonePlain,
   deleteChannelDevice,
   deleteDeviceTag,
   deleteProjectFile,
@@ -571,7 +572,7 @@ async function loadAlarmsConfig() {
   try {
     const body = await getAlarms();
     alarmsConfig.value = {
-      areas: body?.areas ? structuredClone(body.areas) : [],
+      areas: body?.areas ? clonePlain(body.areas) : [],
     };
   } catch {
     alarmsConfig.value = { areas: [] };
@@ -582,7 +583,7 @@ async function loadAdvancedTagsConfig() {
   try {
     const body = await getAdvancedTags();
     advancedTagsConfig.value = {
-      groups: body?.groups ? structuredClone(body.groups) : [],
+      groups: body?.groups ? clonePlain(body.groups) : [],
     };
   } catch {
     advancedTagsConfig.value = { groups: [] };
@@ -1510,13 +1511,13 @@ async function syncPropsFromSelection() {
 
 function onAlarmsMutated(cfg: AlarmsConfig) {
   alarmsConfig.value = {
-    areas: structuredClone(cfg?.areas || []),
+    areas: clonePlain(cfg?.areas || []),
   };
 }
 
 function onAdvancedTagsMutated(cfg: AdvancedTagsConfig) {
   advancedTagsConfig.value = {
-    groups: structuredClone(cfg?.groups || []),
+    groups: clonePlain(cfg?.groups || []),
   };
 }
 

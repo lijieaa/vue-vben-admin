@@ -26,6 +26,7 @@ import {
 } from 'element-plus';
 
 import {
+  clonePlain,
   emptyTrigger,
   newTagDef,
   scadaErrorMessage,
@@ -73,7 +74,7 @@ const exprSnippets = [
 ];
 
 function cloneTag(t: AdvancedTagDef): AdvancedTagDef {
-  return structuredClone(t);
+  return clonePlain(t);
 }
 
 function ensureTrigger(t?: AdvancedTrigger | null): AdvancedTrigger {

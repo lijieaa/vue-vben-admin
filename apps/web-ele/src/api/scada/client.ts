@@ -29,3 +29,8 @@ export function scadaErrorMessage(error: unknown): string {
     'scada request failed'
   );
 }
+
+/** Deep-clone plain JSON-like data (safe for Vue reactive proxies). */
+export function clonePlain<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}

@@ -30,6 +30,7 @@ import {
 
 import {
   ackAlarm,
+  clonePlain,
   getAlarmEvents,
   getAlarms,
   getAlarmState,
@@ -146,7 +147,7 @@ function onTreeClick(data: TreeNode) {
 
 function notifyMutated() {
   emit('mutated', {
-    areas: structuredClone(config.value.areas || []),
+    areas: clonePlain(config.value.areas || []),
   });
 }
 
@@ -155,7 +156,7 @@ async function loadConfig() {
   try {
     const body = await getAlarms();
     config.value = {
-      areas: body?.areas ? structuredClone(body.areas) : [],
+      areas: body?.areas ? clonePlain(body.areas) : [],
     };
     if (props.hideTree && props.focusPath) {
       applyFocusPath(props.focusPath);
@@ -174,7 +175,7 @@ async function saveConfig() {
   try {
     const body = await putAlarms(config.value);
     config.value = {
-      areas: body?.areas ? structuredClone(body.areas) : config.value.areas,
+      areas: body?.areas ? clonePlain(body.areas) : config.value.areas,
     };
     ElMessage.success($t('scada.alarms.saved'));
     notifyMutated();

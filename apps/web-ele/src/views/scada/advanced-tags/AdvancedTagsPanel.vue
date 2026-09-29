@@ -27,6 +27,7 @@ import {
 } from 'element-plus';
 
 import {
+  clonePlain,
   getAdvancedTags,
   putAdvancedTags,
   scadaErrorMessage,
@@ -342,7 +343,7 @@ function openEdit(row?: AdvancedTagDef | null) {
     return;
   }
   dlgKind.value = tag.kind;
-  dlgInitial.value = structuredClone(tag);
+  dlgInitial.value = clonePlain(tag);
   dlgOpen.value = true;
 }
 
