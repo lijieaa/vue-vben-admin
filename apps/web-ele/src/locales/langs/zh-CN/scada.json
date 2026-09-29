@@ -540,7 +540,7 @@
     "selectFromTree": "在工程树中选择「高级标签」节点进行编辑",
     "selectGroup": "请先选择一个组",
     "selectGroupFirst": "请先在工程树中选择标签组",
-    "selectGroupOrRoot": "请选择标签组以显示标签列表。可用「新建标签组」创建。",
+    "selectGroupOrRoot": "选中高级标签根可直接新建标签，或选择标签组后新建。",
     "selectTagFirst": "请先在列表中选择标签",
     "selectNodeFirst": "请先选择标签或标签组",
     "emptyList": "点击此处添加高级标签。",

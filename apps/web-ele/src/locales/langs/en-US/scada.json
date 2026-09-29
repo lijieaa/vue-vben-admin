@@ -540,7 +540,7 @@
     "selectFromTree": "Select Advanced Tags in the project tree to edit",
     "selectGroup": "Select a group first",
     "selectGroupFirst": "Select a tag group in the project tree first",
-    "selectGroupOrRoot": "Select a tag group to show its tags. Use New Tag Group to create one.",
+    "selectGroupOrRoot": "Select the Advanced Tags root to create tags, or pick a tag group.",
     "selectTagFirst": "Select a tag in the list first",
     "selectNodeFirst": "Select a tag or group first",
     "emptyList": "Click here to add a new advanced tag.",

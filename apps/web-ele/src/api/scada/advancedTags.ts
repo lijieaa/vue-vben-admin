@@ -69,6 +69,8 @@ export interface AdvancedTagGroup {
 
 export interface AdvancedTagsConfig {
   groups: AdvancedTagGroup[];
+  /** Tags directly under Advanced Tags root (no group required). */
+  tags?: AdvancedTagDef[];
 }
 
 export interface AdvancedValidateResult {

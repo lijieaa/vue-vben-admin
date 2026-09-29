@@ -207,7 +207,7 @@ const tagsByDevice = ref<Record<string, ScadaTagEntry[]>>({});
 const connected = ref(false);
 const lastError = ref('');
 const alarmsConfig = ref<AlarmsConfig>({ areas: [] });
-const advancedTagsConfig = ref<AdvancedTagsConfig>({ groups: [] });
+const advancedTagsConfig = ref<AdvancedTagsConfig>({ groups: [], tags: [] });
 const advancedTagsPanelRef = ref<null | {
   createGroup: () => void;
   createKind: (kind: string) => void;
@@ -494,7 +494,15 @@ const treeData = computed<TreeNode[]>(() => {
     id: 'advanced-tags',
     label: $t('scada.workspace.advancedTagsRoot'),
     kind: 'advanced_tags',
-    children: buildAdvancedNodes(advancedTagsConfig.value.groups, ''),
+    children: [
+      ...buildAdvancedNodes(advancedTagsConfig.value.groups, ''),
+      ...(advancedTagsConfig.value.tags || []).map((t) => ({
+        id: `at-tag-${t.name}`,
+        label: `${t.name || '(tag)'} [${t.kind || '?'}]`,
+        kind: 'advanced_tag' as const,
+        atPath: t.name,
+      })),
+    ],
   };
   let catalog = projectCatalog.value;
   if (catalog.length === 0 && projectFile.value) {
@@ -584,9 +592,10 @@ async function loadAdvancedTagsConfig() {
     const body = await getAdvancedTags();
     advancedTagsConfig.value = {
       groups: body?.groups ? clonePlain(body.groups) : [],
+      tags: body?.tags ? clonePlain(body.tags) : [],
     };
   } catch {
-    advancedTagsConfig.value = { groups: [] };
+    advancedTagsConfig.value = { groups: [], tags: [] };
   }
 }
 
@@ -1518,6 +1527,7 @@ function onAlarmsMutated(cfg: AlarmsConfig) {
 function onAdvancedTagsMutated(cfg: AdvancedTagsConfig) {
   advancedTagsConfig.value = {
     groups: clonePlain(cfg?.groups || []),
+    tags: clonePlain(cfg?.tags || []),
   };
 }
 

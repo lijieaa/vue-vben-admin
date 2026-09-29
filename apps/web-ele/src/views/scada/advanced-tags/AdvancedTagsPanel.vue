@@ -72,7 +72,7 @@ const KINDS: AdvancedKind[] = [
   'link',
 ];
 
-const config = ref<AdvancedTagsConfig>({ groups: [] });
+const config = ref<AdvancedTagsConfig>({ groups: [], tags: [] });
 const loading = ref(false);
 const saving = ref(false);
 const dirty = ref(false);
@@ -151,25 +151,30 @@ function ensureGroupPath(path: string): AdvancedTagGroup | null {
   return cur;
 }
 
+/** Tag list for current focus: root TagList or selected group's TagList. */
+function tagsAtFocus(): AdvancedTagDef[] {
+  if (!selectedGroupPath.value) {
+    if (!config.value.tags) config.value.tags = [];
+    return config.value.tags;
+  }
+  const g = findGroup(config.value.groups, selectedGroupPath.value);
+  if (!g) return [];
+  if (!g.tags) g.tags = [];
+  return g.tags;
+}
+
 const activeGroup = computed(() =>
   findGroup(config.value.groups, selectedGroupPath.value),
 );
 
 const listRows = computed(() => {
-  const g = activeGroup.value;
-  if (!g) {
-    if (!selectedGroupPath.value) {
-      return [];
-    }
-    return [];
+  if (!selectedGroupPath.value) {
+    return config.value.tags || [];
   }
-  return g.tags || [];
+  return activeGroup.value?.tags || [];
 });
 
 const listHint = computed(() => {
-  if (!selectedGroupPath.value) {
-    return $t('scada.advancedTags.selectGroupOrRoot');
-  }
   if (listRows.value.length === 0) {
     return $t('scada.advancedTags.emptyList');
   }
@@ -202,11 +207,11 @@ const toolbarCaps = computed<AdvancedToolbarCaps>(() => {
       canDelete: true,
     };
   }
-  // Advanced Tags root: New Tag Group only.
+  // Advanced Tags root: New Tag Group + New* kinds (Configuration TagList).
   return {
     focus: 'root',
     canNewGroup: true,
-    canNewKind: false,
+    canNewKind: true,
     canEnable: false,
     canDisable: false,
     canDelete: false,
@@ -245,7 +250,10 @@ async function load() {
   loading.value = true;
   try {
     const body = await getAdvancedTags();
-    config.value = { groups: body?.groups || [] };
+    config.value = {
+      groups: body?.groups || [],
+      tags: body?.tags || [],
+    };
     dirty.value = false;
     emit('mutated', config.value);
   } catch (error) {
@@ -261,7 +269,10 @@ async function save() {
   saving.value = true;
   try {
     const body = await putAdvancedTags(config.value);
-    config.value = { groups: body?.groups || config.value.groups };
+    config.value = {
+      groups: body?.groups || config.value.groups,
+      tags: body?.tags || config.value.tags || [],
+    };
     dirty.value = false;
     emit('mutated', config.value);
     ElMessage.success($t('scada.advancedTags.saved'));
@@ -288,6 +299,14 @@ function applyFocusPath(path: string) {
     selectedGroupPath.value = groupPath;
     selectedTagId.value = '';
     selectedRow.value = null;
+    return;
+  }
+  // Root-level tag: single segment under Advanced Tags root.
+  if (parts.length === 1) {
+    const tag = (config.value.tags || []).find((t) => t.name === parts[0]);
+    selectedGroupPath.value = '';
+    selectedTagId.value = tag?.id || '';
+    selectedRow.value = tag || null;
     return;
   }
   const gp = parts.slice(0, -1).join('/');
@@ -327,10 +346,7 @@ function onRowClick(row: AdvancedTagDef) {
 }
 
 function openCreate(kind: AdvancedKind) {
-  if (!selectedGroupPath.value) {
-    ElMessage.warning($t('scada.advancedTags.selectGroupFirst'));
-    return;
-  }
+  // Root or group both accept New* (Configuration TagList / group TagList).
   dlgKind.value = kind;
   dlgInitial.value = null;
   dlgOpen.value = true;
@@ -348,17 +364,16 @@ function openEdit(row?: AdvancedTagDef | null) {
 }
 
 function onDialogConfirm(tag: AdvancedTagDef) {
-  const g = ensureGroupPath(selectedGroupPath.value);
-  if (!g) {
+  const list = tagsAtFocus();
+  if (selectedGroupPath.value && !activeGroup.value) {
     ElMessage.warning($t('scada.advancedTags.selectGroupFirst'));
     return;
   }
-  if (!g.tags) g.tags = [];
-  const idx = g.tags.findIndex((t) => t.id === tag.id);
+  const idx = list.findIndex((t) => t.id === tag.id);
   if (idx === -1) {
-    g.tags.push(tag);
+    list.push(tag);
   } else {
-    g.tags[idx] = tag;
+    list[idx] = tag;
   }
   selectedTagId.value = tag.id;
   selectedRow.value = tag;
@@ -427,9 +442,9 @@ function confirmGroupDlg() {
 }
 
 function setEnabled(enabled: boolean) {
-  if (selectedRow.value && selectedGroupPath.value) {
-    const g = findGroup(config.value.groups, selectedGroupPath.value);
-    const tag = g?.tags?.find((t) => t.id === selectedRow.value?.id);
+  if (selectedRow.value) {
+    const list = tagsAtFocus();
+    const tag = list.find((t) => t.id === selectedRow.value?.id);
     if (tag) {
       tag.enabled = enabled;
       selectedRow.value = tag;
@@ -449,7 +464,7 @@ function setEnabled(enabled: boolean) {
 }
 
 async function removeSelected() {
-  if (selectedRow.value && selectedGroupPath.value) {
+  if (selectedRow.value) {
     try {
       await ElMessageBox.confirm(
         $t('scada.advancedTags.confirmDeleteTag', {
@@ -461,14 +476,19 @@ async function removeSelected() {
     } catch {
       return;
     }
-    const g = findGroup(config.value.groups, selectedGroupPath.value);
-    if (g?.tags) {
-      g.tags = g.tags.filter((t) => t.id !== selectedRow.value?.id);
-      selectedRow.value = null;
-      selectedTagId.value = '';
-      markDirty();
-      emit('mutated', config.value);
+    const id = selectedRow.value.id;
+    if (selectedGroupPath.value) {
+      const g = findGroup(config.value.groups, selectedGroupPath.value);
+      if (g?.tags) {
+        g.tags = g.tags.filter((t) => t.id !== id);
+      }
+    } else {
+      config.value.tags = (config.value.tags || []).filter((t) => t.id !== id);
     }
+    selectedRow.value = null;
+    selectedTagId.value = '';
+    markDirty();
+    emit('mutated', config.value);
     return;
   }
   if (selectedGroupPath.value) {
