@@ -418,6 +418,122 @@ export async function checkAdvancedExpression(dialog: Locator) {
     .click();
 }
 
+/** Cumulative source tag path. */
+export async function setCumulativeSource(dialog: Locator, sourcePath: string) {
+  await fillAdvancedTagPath(dialog, /源标签|Source/i, sourcePath);
+}
+
+/** Cumulative wrap Data Type: Byte / Word / DWord (stored as max_type). */
+export async function setCumulativeMaxType(dialog: Locator, typeName: RegExp) {
+  await selectAdvancedFormOption(
+    dialog,
+    /数据类型|Data Type|Data type/i,
+    typeName,
+  );
+}
+
+/** Optional custom wrap Maximum Value. */
+export async function setCumulativeMaxValue(dialog: Locator, value: number) {
+  const item = dialog
+    .locator('.el-form-item')
+    .filter({ hasText: /最大值|Maximum value|Max value/i })
+    .first();
+  const input = item.locator('.el-input-number input, input').first();
+  await expect(input).toBeVisible({ timeout: 10_000 });
+  await input.fill(String(value));
+  await input.blur();
+}
+
+/** Link Input / Output paths. */
+export async function setLinkPaths(
+  dialog: Locator,
+  opts: { input: string; output: string },
+) {
+  await fillAdvancedTagPath(dialog, /输入标签|Input/i, opts.input);
+  await fillAdvancedTagPath(dialog, /输出标签|Output/i, opts.output);
+}
+
+export async function setLinkDeadValue(dialog: Locator, dead: string) {
+  const item = dialog
+    .locator('.el-form-item')
+    .filter({ hasText: /死值|Dead value/i })
+    .first();
+  await item.locator('input').fill(dead);
+}
+
+export async function setLinkMode(dialog: Locator, modeLabel: RegExp) {
+  await selectAdvancedFormOption(
+    dialog,
+    /链接模式|Link mode|Link Mode/i,
+    modeLabel,
+  );
+}
+
+export async function setLinkRateMs(dialog: Locator, rateMs: number) {
+  const item = dialog
+    .locator('.el-form-item')
+    .filter({ hasText: /链接周期|Link rate|Rate \(ms\)/i })
+    .first();
+  const input = item.locator('.el-input-number input, input').first();
+  await expect(input).toBeVisible({ timeout: 10_000 });
+  await input.fill(String(rateMs));
+  await input.blur();
+}
+
+export async function setLinkTriggerType(dialog: Locator, typeLabel: RegExp) {
+  await selectAdvancedFormOption(
+    dialog,
+    /触发类型|Trigger type|Trigger Type/i,
+    typeLabel,
+  );
+}
+
+export async function setLinkTriggerGate(
+  dialog: Locator,
+  opts: {
+    triggerTag: string;
+    comparison?: string;
+    triggerValue?: string;
+    scanRateMs?: number;
+  },
+) {
+  await fillAdvancedTagPath(
+    dialog,
+    /触发标签|Trigger tag|Trigger Tag/i,
+    opts.triggerTag,
+  );
+  if (opts.comparison) {
+    const item = dialog
+      .locator('.el-form-item')
+      .filter({ hasText: /比较|Comparison/i })
+      .first();
+    await item.locator('.el-select').first().click();
+    const opt = dialog
+      .page()
+      .locator('.el-select-dropdown:visible .el-select-dropdown__item')
+      .filter({ hasText: opts.comparison })
+      .first();
+    await expect(opt).toBeVisible({ timeout: 10_000 });
+    await opt.click();
+  }
+  if (opts.triggerValue !== undefined) {
+    const item = dialog
+      .locator('.el-form-item')
+      .filter({ hasText: /比较值|Trigger value|^Value$/i })
+      .first();
+    await item.locator('input').fill(opts.triggerValue);
+  }
+  if (opts.scanRateMs !== undefined) {
+    const item = dialog
+      .locator('.el-form-item')
+      .filter({ hasText: /触发扫描|Trigger scan/i })
+      .first();
+    const input = item.locator('.el-input-number input, input').first();
+    await input.fill(String(opts.scanRateMs));
+    await input.blur();
+  }
+}
+
 export async function openComplexJsonValue(
   page: Page,
   tagName: string,
