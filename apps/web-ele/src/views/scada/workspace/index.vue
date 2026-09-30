@@ -2,6 +2,9 @@
 import type { ChannelPayload } from '../channel/ChannelForm.vue';
 
 import type {
+  AdvancedPropsFocus,
+  AdvancedTagDef,
+  AdvancedTagGroup,
   AdvancedTagsConfig,
   AdvancedToolbarCaps,
   AlarmsConfig,
@@ -96,6 +99,7 @@ import {
   scadaMqttLive,
 } from '#/api/scada';
 
+import AdvancedTagPropsPanel from '../advanced-tags/AdvancedTagPropsPanel.vue';
 import AdvancedTagsPanel from '../advanced-tags/AdvancedTagsPanel.vue';
 import atIconDisable from '../advanced-tags/icons/disable.png';
 import atIconEnable from '../advanced-tags/icons/enable.png';
@@ -232,8 +236,10 @@ const advancedTagsConfig = ref<AdvancedTagsConfig>({ groups: [], tags: [] });
 const advancedTagsPanelRef = ref<null | {
   createGroup: () => void;
   createKind: (kind: string) => void;
-  openEdit: () => void;
+  onPropsChange: () => void;
+  onPropsSave: () => Promise<void>;
   removeSelected: () => Promise<void> | void;
+  renameActiveGroup: (name: string) => void;
   save: (opts?: { quiet?: boolean }) => Promise<void>;
   setEnabled: (enabled: boolean) => Promise<void> | void;
 }>(null);
@@ -245,9 +251,40 @@ const advancedToolbarCaps = ref<AdvancedToolbarCaps>({
   canDisable: false,
   canDelete: false,
 });
+const advancedSelection = ref<{
+  focus: AdvancedPropsFocus;
+  group: AdvancedTagGroup | null;
+  groupPath: string;
+  tag: AdvancedTagDef | null;
+}>({
+  focus: 'root',
+  tag: null,
+  group: null,
+  groupPath: '',
+});
 
 function onAdvancedToolbarCaps(caps: AdvancedToolbarCaps) {
   advancedToolbarCaps.value = caps;
+}
+
+function onAdvancedSelection(sel: {
+  focus: AdvancedPropsFocus;
+  group: AdvancedTagGroup | null;
+  groupPath: string;
+  tag: AdvancedTagDef | null;
+}) {
+  advancedSelection.value = sel;
+}
+
+const advancedPropsSaving = ref(false);
+
+async function onAdvancedPropsSave() {
+  advancedPropsSaving.value = true;
+  try {
+    await advancedTagsPanelRef.value?.onPropsSave();
+  } finally {
+    advancedPropsSaving.value = false;
+  }
 }
 
 /** Host AT New* icons: bitmap resid == cmd id (0x4e21=20001 ... 0x4e2a=20010). */
@@ -2580,21 +2617,69 @@ function onMenuCommand(cmd: string) {
                 />
               </ResizablePanel>
 
-              <ResizablePanel
-                v-else-if="advancedTagsContext"
-                :default-size="86"
-                :min-size="40"
-              >
-                <AdvancedTagsPanel
-                  ref="advancedTagsPanelRef"
-                  embed
-                  hide-tree
-                  :focus-path="advancedTagsFocusPath"
-                  :mqtt-slug="projectMqttSlug"
-                  @mutated="onAdvancedTagsMutated"
-                  @toolbar-caps="onAdvancedToolbarCaps"
+              <template v-else-if="advancedTagsContext">
+                <ResizablePanel :default-size="58" :min-size="20">
+                  <AdvancedTagsPanel
+                    ref="advancedTagsPanelRef"
+                    embed
+                    hide-tree
+                    :focus-path="advancedTagsFocusPath"
+                    :mqtt-slug="projectMqttSlug"
+                    @mutated="onAdvancedTagsMutated"
+                    @toolbar-caps="onAdvancedToolbarCaps"
+                    @selection="onAdvancedSelection"
+                  />
+                </ResizablePanel>
+
+                <ResizableHandle
+                  class="bg-border hover:bg-primary/40 data-[resize-handle-active]:bg-primary/50 w-1 transition-colors"
                 />
-              </ResizablePanel>
+
+                <ResizablePanel
+                  :default-size="28"
+                  :min-size="16"
+                  :max-size="50"
+                >
+                  <aside class="flex h-full min-h-0 flex-col overflow-hidden">
+                    <div
+                      class="bg-muted/30 flex shrink-0 items-center border-b px-3 py-2 text-xs font-medium"
+                    >
+                      {{ $t('scada.workspace.propertySheet') }}
+                      <span
+                        v-if="
+                          advancedSelection.focus === 'tag' &&
+                          advancedSelection.tag
+                        "
+                        class="text-muted-foreground ml-1 font-normal"
+                      >
+                        · {{ advancedSelection.tag.name }}
+                      </span>
+                      <span
+                        v-else-if="
+                          advancedSelection.focus === 'group' &&
+                          advancedSelection.group
+                        "
+                        class="text-muted-foreground ml-1 font-normal"
+                      >
+                        · {{ advancedSelection.group.name }}
+                      </span>
+                    </div>
+                    <AdvancedTagPropsPanel
+                      class="min-h-0 flex-1"
+                      :focus="advancedSelection.focus"
+                      :tag="advancedSelection.tag"
+                      :group="advancedSelection.group"
+                      :saving="advancedPropsSaving"
+                      @change="() => advancedTagsPanelRef?.onPropsChange()"
+                      @group-rename="
+                        (name: string) =>
+                          advancedTagsPanelRef?.renameActiveGroup(name)
+                      "
+                      @save="() => void onAdvancedPropsSave()"
+                    />
+                  </aside>
+                </ResizablePanel>
+              </template>
 
               <template v-else>
                 <ResizablePanel :default-size="58" :min-size="20">

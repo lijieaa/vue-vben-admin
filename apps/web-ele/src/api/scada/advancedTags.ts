@@ -57,6 +57,8 @@ export interface AdvancedTagDef {
   send_trigger?: AdvancedTrigger;
   expression?: string;
   trigger?: AdvancedTrigger;
+  /** Derived output data type (String/Boolean/…/Double). */
+  data_type?: string;
   max_type?: string;
   max_value?: number;
 }
@@ -142,6 +144,7 @@ export function newTagDef(kind: AdvancedKind, name: string): AdvancedTagDef {
       return {
         ...base,
         expression: '',
+        data_type: 'Double',
         trigger: emptyTrigger('by_rate'),
       };
     }

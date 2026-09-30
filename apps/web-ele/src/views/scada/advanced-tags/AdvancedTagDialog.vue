@@ -83,11 +83,38 @@ const exprSnippets = [
   { label: 'QUALITY()', insert: 'QUALITY("")' },
   { label: 'ABS()', insert: 'ABS()' },
   { label: 'SQRT()', insert: 'SQRT()' },
-  { label: 'IF()', insert: 'IF(,,)' },
+  { label: 'POW()', insert: 'POW(,)' },
+  { label: 'SIN()', insert: 'SIN()' },
+  { label: 'COS()', insert: 'COS()' },
+  { label: 'TAN()', insert: 'TAN()' },
+  { label: 'ASIN()', insert: 'ASIN()' },
+  { label: 'ACOS()', insert: 'ACOS()' },
+  { label: 'ATAN()', insert: 'ATAN()' },
+  { label: 'AND', insert: ' AND ' },
+  { label: 'OR', insert: ' OR ' },
+  { label: 'NOT', insert: 'NOT ' },
+  { label: 'TRUE', insert: 'TRUE' },
+  { label: 'FALSE', insert: 'FALSE' },
+  { label: 'ON', insert: 'ON' },
+  { label: 'OFF', insert: 'OFF' },
   { label: '+', insert: ' + ' },
   { label: '-', insert: ' - ' },
   { label: '*', insert: ' * ' },
   { label: '/', insert: ' / ' },
+  { label: '%', insert: ' % ' },
+];
+
+const derivedDataTypes = [
+  'String',
+  'Boolean',
+  'Char',
+  'Byte',
+  'Short',
+  'Word',
+  'Long',
+  'DWord',
+  'Float',
+  'Double',
 ];
 
 function cloneTag(t: AdvancedTagDef): AdvancedTagDef {
@@ -122,6 +149,7 @@ watch(
       }
       if (c.kind === 'derived') {
         c.trigger = ensureTrigger(c.trigger);
+        if (!c.data_type) c.data_type = 'Double';
       }
       draft.value = c;
     } else {
@@ -507,6 +535,16 @@ function insertByLabel(el: AdvancedElement) {
 
       <!-- Derived -->
       <template v-if="draft.kind === 'derived'">
+        <ElFormItem :label="$t('scada.advancedTags.dataType')">
+          <ElSelect v-model="draft.data_type" class="w-full">
+            <ElOption
+              v-for="dt in derivedDataTypes"
+              :key="dt"
+              :value="dt"
+              :label="dt"
+            />
+          </ElSelect>
+        </ElFormItem>
         <ElFormItem :label="$t('scada.advancedTags.expression')">
           <div class="w-full">
             <div class="mb-1 flex flex-wrap gap-1">
@@ -577,7 +615,10 @@ function insertByLabel(el: AdvancedElement) {
             </template>
             <template v-else>
               <TagPathField v-model="draft.trigger.trigger_tag" />
-              <TagPathField v-model="draft.trigger.complete_tag" />
+              <TagPathField
+                v-model="draft.trigger.complete_tag"
+                :placeholder="$t('scada.advancedTags.completeTag')"
+              />
             </template>
           </div>
         </ElFormItem>
@@ -670,10 +711,16 @@ function insertByLabel(el: AdvancedElement) {
               </ElSelect>
             </div>
           </template>
-          <TagPathField
-            v-else
-            v-model="elementDraft.insert_trigger.trigger_tag"
-          />
+          <template v-else>
+            <TagPathField
+              v-model="elementDraft.insert_trigger.trigger_tag"
+              :placeholder="$t('scada.advancedTags.triggerTag')"
+            />
+            <TagPathField
+              v-model="elementDraft.insert_trigger.complete_tag"
+              :placeholder="$t('scada.advancedTags.completeTag')"
+            />
+          </template>
         </div>
       </ElFormItem>
     </ElForm>

@@ -328,3 +328,22 @@ export async function putAdvancedTagsConfig(body: AdvancedTagsConfigBody) {
 export async function resetAdvancedTagsConfig() {
   return putAdvancedTagsConfig({ groups: [], tags: [] });
 }
+
+/**
+ * Snapshot current Advanced Tags, run work against a cleared tree, then restore.
+ * Use around e2e suites that hit a shared local scada instance.
+ */
+export async function withClearedAdvancedTags<T>(
+  fn: () => Promise<T>,
+): Promise<T> {
+  const snapshot = await getAdvancedTagsConfig();
+  try {
+    await resetAdvancedTagsConfig();
+    return await fn();
+  } finally {
+    await putAdvancedTagsConfig({
+      groups: snapshot.groups ?? [],
+      tags: snapshot.tags ?? [],
+    });
+  }
+}

@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 import type {
   AdvancedKind,
+  AdvancedPropsFocus,
   AdvancedTagDef,
   AdvancedTagGroup,
   AdvancedTagsConfig,
@@ -27,7 +28,6 @@ import {
 } from 'element-plus';
 
 import {
-  clonePlain,
   fetchLiveTags,
   fetchProject,
   getAdvancedTags,
@@ -37,6 +37,7 @@ import {
 } from '#/api/scada';
 
 import AdvancedTagDialog from './AdvancedTagDialog.vue';
+import AdvancedTagPropsPanel from './AdvancedTagPropsPanel.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -57,6 +58,14 @@ const props = withDefaults(
 const emit = defineEmits<{
   mutated: [config: AdvancedTagsConfig];
   toolbarCaps: [caps: AdvancedToolbarCaps];
+  selection: [
+    sel: {
+      focus: AdvancedPropsFocus;
+      group: AdvancedTagGroup | null;
+      groupPath: string;
+      tag: AdvancedTagDef | null;
+    },
+  ];
 }>();
 
 const AT_ROOT = '_AdvancedTags';
@@ -91,14 +100,11 @@ const selectedRow = ref<AdvancedTagDef | null>(null);
 
 const dlgOpen = ref(false);
 const dlgKind = ref<AdvancedKind>('link');
-const dlgInitial = ref<AdvancedTagDef | null>(null);
 
 const groupDlgOpen = ref(false);
 const groupDlgName = ref('');
 const groupDlgEnabled = ref(true);
-const groupDlgEditPath = ref('');
 
-/** Live VTQ for list paths (MQTT primary, HTTP poll fallback). */
 const liveByPath = ref<Record<string, { value?: unknown; quality?: unknown }>>(
   {},
 );
@@ -123,7 +129,7 @@ function dataTypeFor(tag: AdvancedTagDef): string {
     case 'minimum':
     case 'maximum':
     case 'derived': {
-      return 'Double';
+      return tag.data_type || 'Double';
     }
     case 'cumulative': {
       switch ((tag.max_type || 'byte').toLowerCase()) {
@@ -165,6 +171,44 @@ function liveValueFor(tag: AdvancedTagDef): string {
   const path = atTagPath(selectedGroupPath.value, tag.name);
   const live = liveByPath.value[path];
   return live ? formatLiveValue(live.value) : '-';
+}
+
+function liveRawValue(tag: AdvancedTagDef): unknown {
+  void liveTick.value;
+  const path = atTagPath(selectedGroupPath.value, tag.name);
+  return liveByPath.value[path]?.value;
+}
+
+function formatComplexJson(raw: unknown): string {
+  if (raw === null || raw === undefined) return '';
+  const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
+const jsonViewOpen = ref(false);
+const jsonViewTitle = ref('');
+const jsonViewText = ref('');
+
+function openComplexJsonView(tag: AdvancedTagDef, evt?: Event) {
+  evt?.stopPropagation();
+  if (tag.kind !== 'complex') return;
+  const raw = liveRawValue(tag);
+  if (raw === null || raw === undefined || raw === '') return;
+  jsonViewTitle.value = tag.name;
+  jsonViewText.value = formatComplexJson(raw);
+  jsonViewOpen.value = true;
+}
+
+function canOpenComplexJson(tag: AdvancedTagDef): boolean {
+  if (tag.kind !== 'complex') return false;
+  const raw = liveRawValue(tag);
+  return (
+    raw !== null && raw !== undefined && raw !== '' && liveValueFor(tag) !== '-'
+  );
 }
 
 function stopLiveFeed() {
@@ -413,6 +457,7 @@ async function save(opts?: { quiet?: boolean }) {
       tags: body?.tags || config.value.tags || [],
     };
     dirty.value = false;
+    rebindSelection();
     emit('mutated', config.value);
     if (!opts?.quiet) {
       ElMessage.success($t('scada.advancedTags.saved'));
@@ -424,6 +469,20 @@ async function save(opts?: { quiet?: boolean }) {
     throw error;
   } finally {
     saving.value = false;
+  }
+}
+
+/** After config replace, keep selectedRow pointing at the live object. */
+function rebindSelection() {
+  const id = selectedTagId.value;
+  if (!id) {
+    selectedRow.value = null;
+    return;
+  }
+  const list = tagsAtFocus();
+  selectedRow.value = list.find((t) => t.id === id) || null;
+  if (!selectedRow.value) {
+    selectedTagId.value = '';
   }
 }
 
@@ -439,8 +498,17 @@ function applyFocusPath(path: string) {
   const asGroup = findGroup(config.value.groups, groupPath);
   if (asGroup) {
     selectedGroupPath.value = groupPath;
-    selectedTagId.value = '';
-    selectedRow.value = null;
+    // Keep list-row selection when focus is the parent group (CTagView).
+    if (selectedTagId.value) {
+      const tag = (asGroup.tags || []).find(
+        (t) => t.id === selectedTagId.value,
+      );
+      selectedRow.value = tag || null;
+      if (!tag) selectedTagId.value = '';
+    } else {
+      selectedTagId.value = '';
+      selectedRow.value = null;
+    }
     return;
   }
   // Root-level tag: single segment under Advanced Tags root.
@@ -490,18 +558,6 @@ function onRowClick(row: AdvancedTagDef) {
 function openCreate(kind: AdvancedKind) {
   // Root or group both accept New* (Configuration TagList / group TagList).
   dlgKind.value = kind;
-  dlgInitial.value = null;
-  dlgOpen.value = true;
-}
-
-function openEdit(row?: AdvancedTagDef | null) {
-  const tag = row || selectedRow.value;
-  if (!tag) {
-    ElMessage.warning($t('scada.advancedTags.selectTagFirst'));
-    return;
-  }
-  dlgKind.value = tag.kind;
-  dlgInitial.value = clonePlain(tag);
   dlgOpen.value = true;
 }
 
@@ -525,21 +581,8 @@ function onDialogConfirm(tag: AdvancedTagDef) {
 }
 
 function openNewGroup() {
-  groupDlgEditPath.value = '';
   groupDlgName.value = 'Group1';
   groupDlgEnabled.value = true;
-  groupDlgOpen.value = true;
-}
-
-function openEditGroup() {
-  const g = activeGroup.value;
-  if (!g) {
-    ElMessage.warning($t('scada.advancedTags.selectGroupFirst'));
-    return;
-  }
-  groupDlgEditPath.value = selectedGroupPath.value;
-  groupDlgName.value = g.name;
-  groupDlgEnabled.value = g.enabled;
   groupDlgOpen.value = true;
 }
 
@@ -549,41 +592,87 @@ function confirmGroupDlg() {
     ElMessage.warning($t('scada.advancedTags.groupNameRequired'));
     return;
   }
-  if (groupDlgEditPath.value) {
-    const g = findGroup(config.value.groups, groupDlgEditPath.value);
-    if (g) {
-      g.name = name;
-      g.enabled = groupDlgEnabled.value;
-      // update path
-      const parts = groupDlgEditPath.value.split('/');
-      parts[parts.length - 1] = name;
-      selectedGroupPath.value = parts.join('/');
-    }
-  } else {
-    const parent = selectedGroupPath.value
-      ? ensureGroupPath(selectedGroupPath.value)
-      : null;
-    const target = parent || null;
-    const list = target ? (target.groups ||= []) : config.value.groups;
-    if (list.some((g) => g.name === name)) {
-      ElMessage.warning($t('scada.advancedTags.groupExists'));
-      return;
-    }
-    list.push({
-      name,
-      enabled: groupDlgEnabled.value,
-      groups: [],
-      tags: [],
-    });
-    selectedGroupPath.value = target
-      ? `${selectedGroupPath.value}/${name}`
-      : name;
+  const parent = selectedGroupPath.value
+    ? ensureGroupPath(selectedGroupPath.value)
+    : null;
+  const target = parent || null;
+  const list = target ? (target.groups ||= []) : config.value.groups;
+  if (list.some((g) => g.name === name)) {
+    ElMessage.warning($t('scada.advancedTags.groupExists'));
+    return;
   }
+  list.push({
+    name,
+    enabled: groupDlgEnabled.value,
+    groups: [],
+    tags: [],
+  });
+  selectedGroupPath.value = target
+    ? `${selectedGroupPath.value}/${name}`
+    : name;
+  selectedRow.value = null;
+  selectedTagId.value = '';
   groupDlgOpen.value = false;
   markDirty();
   emit('mutated', config.value);
   void persistConfig();
 }
+
+function renameActiveGroup(name: string) {
+  const g = activeGroup.value;
+  if (!g || !selectedGroupPath.value) return;
+  const trimmed = name.trim();
+  if (!trimmed || trimmed === g.name) return;
+  const parentPath = selectedGroupPath.value.includes('/')
+    ? selectedGroupPath.value.slice(0, selectedGroupPath.value.lastIndexOf('/'))
+    : '';
+  const siblings = parentPath
+    ? findGroup(config.value.groups, parentPath)?.groups || []
+    : config.value.groups;
+  if (siblings.some((x) => x.name === trimmed && x !== g)) {
+    ElMessage.warning($t('scada.advancedTags.groupExists'));
+    return;
+  }
+  g.name = trimmed;
+  const parts = selectedGroupPath.value.split('/');
+  parts[parts.length - 1] = trimmed;
+  selectedGroupPath.value = parts.join('/');
+  onPropsChange();
+}
+
+/** PropertySheet field edits: mark dirty only; Save button persists. */
+function onPropsChange() {
+  markDirty();
+  emit('mutated', config.value);
+}
+
+async function onPropsSave() {
+  try {
+    await save();
+  } catch {
+    /* save() already toasts */
+  }
+}
+
+const propsFocus = computed<AdvancedPropsFocus>(() => {
+  if (selectedRow.value) return 'tag';
+  if (selectedGroupPath.value && activeGroup.value) return 'group';
+  if (!selectedGroupPath.value) return 'root';
+  return 'empty';
+});
+
+watch(
+  [propsFocus, selectedRow, activeGroup, selectedGroupPath],
+  () => {
+    emit('selection', {
+      focus: propsFocus.value,
+      tag: selectedRow.value,
+      group: activeGroup.value,
+      groupPath: selectedGroupPath.value,
+    });
+  },
+  { immediate: true, deep: true },
+);
 
 function setEnabled(enabled: boolean) {
   if (selectedRow.value) {
@@ -691,8 +780,12 @@ defineExpose({
   save,
   reload: load,
   removeSelected,
-  openEdit,
+  onPropsChange,
+  onPropsSave,
+  renameActiveGroup,
   toolbarCaps,
+  saving,
+  dirty,
 });
 
 onMounted(() => {
@@ -760,9 +853,6 @@ onUnmounted(() => {
         @click="setEnabled(false)"
       >
         {{ $t('scada.advancedTags.disable') }}
-      </ElButton>
-      <ElButton size="small" :disabled="!selectedRow" @click="openEdit()">
-        {{ $t('scada.advancedTags.properties') }}
       </ElButton>
       <ElButton
         size="small"
@@ -839,15 +929,6 @@ onUnmounted(() => {
           <span v-if="dirty" class="text-amber-600">
             {{ $t('scada.advancedTags.unsaved') }}
           </span>
-          <ElButton
-            v-if="selectedGroupPath && embed"
-            size="small"
-            text
-            class="!h-6"
-            @click="openEditGroup"
-          >
-            {{ $t('scada.advancedTags.groupProps') }}
-          </ElButton>
         </div>
 
         <ElTable
@@ -858,7 +939,6 @@ onUnmounted(() => {
           class="min-h-0 flex-1"
           :empty-text="listHint"
           @row-click="(row) => onRowClick(row as AdvancedTagDef)"
-          @row-dblclick="(row) => openEdit(row as AdvancedTagDef)"
         >
           <ElTableColumn
             prop="name"
@@ -896,7 +976,17 @@ onUnmounted(() => {
             show-overflow-tooltip
           >
             <template #default="{ row }">
-              {{ liveValueFor(row as AdvancedTagDef) }}
+              <span
+                v-if="canOpenComplexJson(row as AdvancedTagDef)"
+                class="text-primary cursor-pointer underline-offset-2 hover:underline"
+                @click="
+                  (e: MouseEvent) =>
+                    openComplexJsonView(row as AdvancedTagDef, e)
+                "
+              >
+                {{ liveValueFor(row as AdvancedTagDef) }}
+              </span>
+              <span v-else>{{ liveValueFor(row as AdvancedTagDef) }}</span>
             </template>
           </ElTableColumn>
           <ElTableColumn
@@ -917,22 +1007,67 @@ onUnmounted(() => {
           </ElTableColumn>
         </ElTable>
       </section>
+
+      <!-- Standalone: right PropertySheet (workspace hosts it when embed). -->
+      <aside
+        v-if="!embed"
+        class="border-border flex w-80 shrink-0 flex-col overflow-hidden border-l"
+      >
+        <div
+          class="bg-muted/30 flex shrink-0 items-center border-b px-3 py-2 text-xs font-medium"
+        >
+          {{ $t('scada.workspace.propertySheet') }}
+          <span
+            v-if="propsFocus === 'tag' && selectedRow"
+            class="text-muted-foreground ml-1 font-normal"
+          >
+            · {{ selectedRow.name }}
+          </span>
+          <span
+            v-else-if="propsFocus === 'group' && activeGroup"
+            class="text-muted-foreground ml-1 font-normal"
+          >
+            · {{ activeGroup.name }}
+          </span>
+        </div>
+        <AdvancedTagPropsPanel
+          class="min-h-0 flex-1"
+          :focus="propsFocus"
+          :tag="selectedRow"
+          :group="activeGroup"
+          :saving="saving"
+          @change="onPropsChange"
+          @group-rename="renameActiveGroup"
+          @save="() => void onPropsSave()"
+        />
+      </aside>
     </div>
 
     <AdvancedTagDialog
       v-model:open="dlgOpen"
       :kind="dlgKind"
-      :initial="dlgInitial"
+      :initial="null"
       @confirm="onDialogConfirm"
     />
 
     <ElDialog
-      v-model="groupDlgOpen"
+      v-model="jsonViewOpen"
       :title="
-        groupDlgEditPath
-          ? $t('scada.advancedTags.groupProps')
-          : $t('scada.advancedTags.newTagGroup')
+        $t('scada.advancedTags.complexValueTitle', { name: jsonViewTitle })
       "
+      width="640px"
+      append-to-body
+      destroy-on-close
+      class="at-complex-json-dlg"
+    >
+      <pre
+        class="bg-muted/40 max-h-[60vh] overflow-auto rounded p-3 font-mono text-xs leading-5 whitespace-pre-wrap break-all"
+        >{{ jsonViewText }}</pre>
+    </ElDialog>
+
+    <ElDialog
+      v-model="groupDlgOpen"
+      :title="$t('scada.advancedTags.newTagGroup')"
       width="400px"
       append-to-body
     >

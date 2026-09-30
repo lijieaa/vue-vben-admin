@@ -262,13 +262,22 @@ export async function selectAdvancedFormOption(
     .locator('.el-form-item')
     .filter({ hasText: label })
     .first();
-  await item.locator('.el-select').click();
+  // Trigger/rate rows may include a unit ElSelect beside the mode select.
+  await item.locator('.el-select').first().click();
   await dialog.page().getByRole('option', { name: option }).click();
 }
 
 export async function addComplexElement(
   dialog: Locator,
-  opts: { name: string; tag: string },
+  opts: {
+    name: string;
+    tag: string;
+    insertBy?: 'by_rate' | 'by_tag';
+    rate?: number;
+    rateUnit?: RegExp;
+    triggerTag?: string;
+    completeTag?: string;
+  },
 ) {
   await dialog.getByRole('button', { name: /添加元素|Add Element/i }).click();
   const elDlg = dialog.page().getByRole('dialog', {
@@ -281,8 +290,171 @@ export async function addComplexElement(
     .locator('input')
     .fill(opts.name);
   await fillAdvancedTagPath(elDlg, /标签路径|Element Tag|Tag Path/i, opts.tag);
+
+  if (opts.insertBy === 'by_tag') {
+    await selectAdvancedFormOption(
+      elDlg,
+      /插入方式|Insert By/i,
+      /按标签|By Tag/i,
+    );
+    await elDlg
+      .getByPlaceholder(/触发标签|Trigger Tag/i)
+      .fill(opts.triggerTag || 'Sim.Dev.Trig');
+    await elDlg
+      .getByPlaceholder(/完成标签|Complete Tag/i)
+      .fill(opts.completeTag || 'Sim.Dev.Done');
+  } else if (
+    opts.insertBy === 'by_rate' &&
+    opts.rate !== null &&
+    opts.rate !== undefined
+  ) {
+    await selectAdvancedFormOption(
+      elDlg,
+      /插入方式|Insert By/i,
+      /按周期|By Rate/i,
+    );
+    const insertItem = elDlg
+      .locator('.el-form-item')
+      .filter({ hasText: /插入方式|Insert By/i });
+    await insertItem.locator('.el-input-number input').fill(String(opts.rate));
+    if (opts.rateUnit) {
+      await insertItem.locator('.el-select').last().click();
+      await elDlg.page().getByRole('option', { name: opts.rateUnit }).click();
+    }
+  }
+
   await elDlg.getByRole('button', { name: /^确定$|^OK$/i }).click();
   await expect(elDlg).toBeHidden({ timeout: 10_000 });
+}
+
+/** Switch complex tag send trigger to By Tag and fill paths. */
+export async function setComplexSendByTag(
+  dialog: Locator,
+  opts: { triggerTag: string; completeTag?: string },
+) {
+  await selectAdvancedFormOption(
+    dialog,
+    /发送触发|Send Trigger/i,
+    /按标签|By Tag/i,
+  );
+  const item = dialog
+    .locator('.el-form-item')
+    .filter({ hasText: /发送触发|Send Trigger/i })
+    .first();
+  // Prefer placeholders; fallback skips ElSelect readonly combobox inputs.
+  const trigger = item.getByPlaceholder(
+    /触发标签|Trigger tag|通道\.设备\.标签|Channel\.Device\.Tag/i,
+  );
+  await expect(trigger.first()).toBeVisible({ timeout: 10_000 });
+  await trigger.first().fill(opts.triggerTag);
+  if (opts.completeTag) {
+    const complete = item.getByPlaceholder(/完成标签|Complete tag/i);
+    await expect(complete).toBeVisible({ timeout: 10_000 });
+    await complete.fill(opts.completeTag);
+  }
+}
+
+/** Derived output Data Type (String/Boolean/.../Double). */
+export async function setDerivedDataType(dialog: Locator, typeName: RegExp) {
+  await selectAdvancedFormOption(dialog, /数据类型|Data Type/i, typeName);
+}
+
+/** Derived trigger: By Tag + optional Complete. */
+export async function setDerivedTriggerByTag(
+  dialog: Locator,
+  opts: { triggerTag: string; completeTag?: string },
+) {
+  await selectAdvancedFormOption(
+    dialog,
+    /触发方式|Trigger Mode|Run By/i,
+    /按标签|By Tag/i,
+  );
+  const item = dialog
+    .locator('.el-form-item')
+    .filter({ hasText: /触发方式|Trigger Mode|Run By/i })
+    .first();
+  const trigger = item.getByPlaceholder(
+    /触发标签|Trigger tag|通道\.设备\.标签|Channel\.Device\.Tag/i,
+  );
+  await expect(trigger.first()).toBeVisible({ timeout: 10_000 });
+  await trigger.first().fill(opts.triggerTag);
+  if (opts.completeTag) {
+    const complete = item.getByPlaceholder(/完成标签|Complete tag/i);
+    if (await complete.count()) {
+      await complete.fill(opts.completeTag);
+    } else {
+      const pathInputs = item.locator(
+        'input.el-input__inner:not([readonly]):not([role="combobox"])',
+      );
+      await pathInputs.nth(1).fill(opts.completeTag);
+    }
+  }
+}
+
+/** Derived trigger: By Rate with numeric period. */
+export async function setDerivedTriggerByRate(
+  dialog: Locator,
+  opts: { rate: number; rateUnit?: RegExp },
+) {
+  await selectAdvancedFormOption(
+    dialog,
+    /触发方式|Trigger Mode|Run By/i,
+    /按周期|By Rate/i,
+  );
+  const item = dialog
+    .locator('.el-form-item')
+    .filter({ hasText: /触发方式|Trigger Mode|Run By/i })
+    .first();
+  await item.locator('.el-input-number input').fill(String(opts.rate));
+  if (opts.rateUnit) {
+    await item.locator('.el-select').last().click();
+    await dialog.page().getByRole('option', { name: opts.rateUnit }).click();
+  }
+}
+
+export async function checkAdvancedExpression(dialog: Locator) {
+  await dialog
+    .getByRole('button', { name: /检查表达式|Check Expression/i })
+    .click();
+}
+
+export async function openComplexJsonValue(
+  page: Page,
+  tagName: string,
+  livePath: string,
+  jsonValue: string,
+) {
+  await page.route('**/api/v1/tags', async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          path: livePath,
+          value: jsonValue,
+          quality: 'good',
+          timestamp: new Date().toISOString(),
+        },
+      ]),
+    });
+  });
+
+  const row = await expectAdvancedTableRow(page, tagName);
+  await row.click();
+  // Wait for polled live value to become clickable.
+  const valueCell = row.locator('.text-primary').filter({ hasText: /items/i });
+  await expect(valueCell).toBeVisible({ timeout: 15_000 });
+  await valueCell.click();
+  const dlg = page.getByRole('dialog').filter({
+    hasText: /复合标签值|Complex tag value/i,
+  });
+  await expect(dlg).toBeVisible({ timeout: 10_000 });
+  await expect(dlg.locator('pre')).toContainText('"items"');
+  return dlg;
 }
 
 export async function expectAdvancedTableRow(page: Page, tagName: string) {

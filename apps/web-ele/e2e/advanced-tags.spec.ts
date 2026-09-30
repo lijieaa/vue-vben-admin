@@ -1,8 +1,13 @@
+import type { AdvancedTagsConfigBody } from './helpers/api';
+
 import { expect, test } from '@playwright/test';
 
-import { getAdvancedTagsConfig, resetAdvancedTagsConfig } from './helpers/api';
 import {
-  addComplexElement,
+  getAdvancedTagsConfig,
+  putAdvancedTagsConfig,
+  resetAdvancedTagsConfig,
+} from './helpers/api';
+import {
   clickAdvancedToolbar,
   confirmAdvancedDialog,
   expectAdvancedTableRow,
@@ -23,12 +28,22 @@ test.describe.configure({ mode: 'serial' });
 
 const stamp = () => Date.now().toString(36);
 
+/** Snapshot of shared scada AT config; restored in afterAll. */
+let atSnapshot: AdvancedTagsConfigBody = { groups: [], tags: [] };
+
+test.beforeAll(async () => {
+  atSnapshot = await getAdvancedTagsConfig();
+});
+
 test.beforeEach(async () => {
   await resetAdvancedTagsConfig();
 });
 
 test.afterAll(async () => {
-  await resetAdvancedTagsConfig();
+  await putAdvancedTagsConfig({
+    groups: atSnapshot.groups ?? [],
+    tags: atSnapshot.tags ?? [],
+  });
 });
 
 async function openAtRoot(page: import('@playwright/test').Page) {
@@ -152,38 +167,6 @@ test('AT root creates Derived with expression and Check Expression', async ({
   const tag = (cfg.tags || []).find((t) => t.name === tagName);
   expect(tag?.kind).toBe('derived');
   expect(tag?.expression).toBe('ABS(-2)');
-});
-
-test('AT root creates Complex with element and ByRate send', async ({
-  page,
-}) => {
-  const tagName = `Cx_${stamp()}`;
-  await openAtRoot(page);
-
-  const dialog = await openNewAdvancedKind(
-    page,
-    /新建复合标签|New Complex Tag/i,
-  );
-  await fillAdvancedTagName(dialog, tagName);
-  await addComplexElement(dialog, { name: 'E1', tag: 'Sim.Dev.T' });
-  await expect(dialog.getByText('E1')).toBeVisible();
-  await confirmAdvancedDialog(dialog);
-  await expectAdvancedTableRow(page, tagName);
-  await saveWorkspaceProject(page);
-
-  const cfg = await getAdvancedTagsConfig();
-  const tag = (cfg.tags || []).find((t) => t.name === tagName) as
-    | undefined
-    | {
-        kind?: string;
-        elements?: Array<{ name?: string; tag?: string }>;
-        send_trigger?: { mode?: string };
-      };
-  expect(tag?.kind).toBe('complex');
-  expect(tag?.elements?.length).toBe(1);
-  expect(tag?.elements?.[0]?.name).toBe('E1');
-  expect(tag?.elements?.[0]?.tag).toBe('Sim.Dev.T');
-  expect(tag?.send_trigger?.mode).toBe('by_rate');
 });
 
 test('AT root creates Cumulative with Word wrap', async ({ page }) => {

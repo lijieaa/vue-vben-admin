@@ -1,3 +1,4 @@
+export * from './advancedTagProps';
 export * from './advancedTags';
 export * from './alarms';
 export * from './channel';
